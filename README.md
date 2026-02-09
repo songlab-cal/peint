@@ -6,7 +6,7 @@ An encoder-decoder transformer for modeling protein sequence evolution. Given a 
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/protevo.git
+git clone https://github.com/songlab-cal/peint.git
 cd protevo
 
 # Install with pip
@@ -26,7 +26,7 @@ pip install -e ".[dev]"
 - CUDA-capable GPU (Flash Attention requires Ampere or newer)
 - For non-Flash version: any GPU or CPU
 
-Note: Flash Attention (`flash-attn`) requires specific CUDA versions. If unavailable, the package falls back to standard attention.
+Note: Flash Attention (`flash-attn`) requires specific CUDA versions. If unavailable, the package falls back to standard attention, though some features are not available right now without Flash Attention. See the documentation for details.
 
 ## Quick Start
 
@@ -92,7 +92,7 @@ print(f"NLL: {nll.item():.4f}")
 ## Training
 
 ```bash
-python train_esmtransformer.py \
+python train_peint_model.py \
     --data_path /path/to/transitions \
     --families_file families.json \
     --output_dir checkpoints \
