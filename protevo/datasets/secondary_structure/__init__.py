@@ -1,0 +1,1 @@
+from ._secondary_structure import compute_secondary_structure_annotations

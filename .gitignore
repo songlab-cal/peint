@@ -1,0 +1,45 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Model checkpoints and weights
+model_checkpoints/
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+
+# Training logs
+wandb/
+lightning_logs/
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IQ-TREE2 build artifacts (submodule source is tracked)
+iqtree2/build/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

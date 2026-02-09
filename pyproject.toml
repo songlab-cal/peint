@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "protevo"
+version = "0.1.0"
+description = "PEINT: Protein Evolution IN Time - A transformer model for protein evolutionary modeling"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "CCBY-NC-4.0"}
+authors = [
+    {name = "Antoine Koehl"}
+]
+keywords = ["protein", "evolution", "transformer", "deep learning", "bioinformatics"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+
+dependencies = [
+    "numpy==1.26.4",
+    "scipy==1.13.1",
+    "pandas==2.2.0",
+    "biopython",
+    "torch==2.5.0",
+    "flash-attn==2.7.0.post2",
+    "einops==0.8.1",
+    "fair-esm",
+    "cherryml @ git+https://github.com/songlab-cal/CherryML",
+]
+
+[project.optional-dependencies]
+train = [
+    "lightning==2.5.0.post0",
+    "wandb",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["protevo*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311"]
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]  # line too long - handled by black
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: marks tests that require model checkpoint (deselect with '-m \"not integration\"')",
+    "slow: marks tests that take a long time to run",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
