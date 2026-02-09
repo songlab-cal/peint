@@ -108,6 +108,12 @@ python train_peint_model.py \
 
 Create training data from a directory of `.a3m` multiple sequence alignment files.
 
+A wrapper around many of these functions is the caching decorator.
+For more information, you can see the original source [caching-decorator source here](https://github.com/sprillo/caching-decorator).
+The idea is that some functions are fairly expensive to run (tree reconstruction, etc), and represent a bottleneck in a pipeline.
+You really want to cache these functions.
+This decorator wraps a function and caches its results to disk.
+
 ```python
 from protevo.datasets import get_a3m_families, a3m_dataset__cached
 
