@@ -98,6 +98,16 @@ nll = torch.nn.functional.cross_entropy(
 print(f"NLL: {nll.item():.4f}")
 ```
 
+### Homology Detection
+
+There are many options for homology detection, we provide a set of tools to do various types of homology detection.
+The most basic is an all-vs-all setup, in which you provide a directory of named proteome files (FASTA format), and a distance matrix specifying the evolutionary time between each pair of proteomes.
+You can either use peint, or DIAMOND (Blastp) for comparison.
+
+```bash
+python -m protevo.homology_detection all-vs-all --method peint --checkpoint model_checkpoints/<model_ckpt>.pt --proteome-dir protevo/tests/homology_test_dir --distance-matrix protevo/tests/times.csv --output results.csv
+```
+
 ## Training
 
 ```bash
