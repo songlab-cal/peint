@@ -24,20 +24,18 @@ classifiers = [
 ]
 
 dependencies = [
-    "numpy==1.26.4",
-    "scipy==1.13.1",
-    "pandas==2.2.0",
+    "numpy>=1.26",
+    "scipy>=1.13",
+    "pandas>=2.2",
     "biopython",
-    "torch==2.5.0",
-    "flash-attn==2.7.0.post2",
-    "einops==0.8.1",
+    "einops>=0.8",
     "fair-esm",
     "cherryml @ git+https://github.com/songlab-cal/CherryML",
 ]
 
 [project.optional-dependencies]
 train = [
-    "lightning==2.5.0.post0",
+    "lightning>=2.5",
     "wandb",
 ]
 dev = [

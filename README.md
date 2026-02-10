@@ -4,30 +4,39 @@ An encoder-decoder transformer for modeling protein sequence evolution. Given a 
 
 ## Installation
 
+### Requirements
+
+- Python >= 3.9
+- PyTorch >= 2.5 (install separately to match your CUDA version)
+- CUDA-capable GPU recommended (Flash Attention requires Ampere or newer)
+- For non-Flash version (`PeintTransformerVanilla`): any GPU or CPU
+
+Note: Flash Attention (`flash-attn`) requires specific CUDA/PyTorch/OS combinations. If installation fails, see `installation.md` for troubleshooting, including how to find the correct prebuilt wheel.
+We used `flash-attn==2.7.0.post2`
+
 ```bash
 # Clone the repository
 git clone https://github.com/songlab-cal/peint.git
-cd protevo
+cd peint
 
-# Install with pip
+# 1. Install PyTorch (match your CUDA version)
+# See https://pytorch.org/get-started/locally/
+pip install torch --index-url https://download.pytorch.org/whl/cu121  # example for CUDA 12.1
+
+# 2. (Recommended) Install Flash Attention for faster training/inference
+# Requires Ampere+ GPU. See installation.md for troubleshooting.
+# This can be found at the Flash-Attention Page: https://github.com/Dao-AILab/flash-attention
+# We used FlashAttention 2.7.0.post2, which is compatible with PyTorch 2.5.0 and CUDA 12.1
+
+# 3. Install core package
 pip install -e .
 
-# For training
+# For training (adds pytorch-lightning and wandb)
 pip install -e ".[train]"
 
 # For development
 pip install -e ".[dev]"
 ```
-
-### Requirements
-
-- Python >= 3.9
-- PyTorch 2.5.0
-- CUDA-capable GPU (Flash Attention requires Ampere or newer)
-- For non-Flash version: any GPU or CPU
-
-Note: Flash Attention (`flash-attn`) requires specific CUDA versions. If unavailable, the package falls back to standard attention, though some features are not available right now without Flash Attention. See the documentation for details.
-
 ## Quick Start
 
 ### Loading a Pretrained Model
