@@ -105,7 +105,12 @@ The most basic is an all-vs-all setup, in which you provide a directory of named
 You can either use peint, or DIAMOND (Blastp) for comparison.
 
 ```bash
-python -m protevo.homology_detection all-vs-all --method peint --checkpoint model_checkpoints/<model_ckpt>.pt --proteome-dir protevo/tests/homology_test_dir --distance-matrix protevo/tests/times.csv --output results.csv
+python -m protevo.homology_detection all-vs-all \
+ --method peint \
+ --checkpoint model_checkpoints/<model_ckpt>.pt \
+ --proteome-dir protevo/tests/homology_test_dir \
+ --distance-matrix protevo/tests/times.csv \
+ --output results.csv
 ```
 
 ## Training
