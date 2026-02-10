@@ -43,10 +43,12 @@ def main(args):
         if args.name_addon:
             run_name = run_name + '-' + args.name_addon
 
-    logger = pl.pytorch.loggers.wandb.WandbLogger(name=run_name, project='protein-evolution', entity='matthew-liu')
+    logger = pl.pytorch.loggers.wandb.WandbLogger(name=run_name, project=args.wandb_project, entity=args.wandb_entity)
 
     print(f"Loaded ESM Model")
 
+    # should be able to load whatever ESM model you want - make sure that the dimensions and
+    # stuff match up with the arguments you pass to the PeintLightningModule
     esm_model, esm_vocab = esm.pretrained.esm2_t30_150M_UR50D()
     #esm_model, esm_vocab = esm.pretrained.esm2_t12_35M_UR50D()
 
@@ -75,12 +77,6 @@ def main(args):
         "use_attention_bias": args.use_attention_bias,
         "dropout_p": args.dropout_p,
     }
-
-    if args.label_smoothing > 0.0:
-        model_args.update({
-            "label_smoothing": args.label_smoothing,
-            "rate_matrix_path": args.rate_matrix_path
-        })
 
     data_args = {
         'data_path': args.data_path,
@@ -158,21 +154,17 @@ if __name__ == "__main__":
     parser.add_argument('--checkpoint_every', type=int, default=5000, help='Save checkpoint every n steps')
     parser.add_argument('--check_val_every_n_epoch', type=int, default=1, help='Validate every n epochs')
     parser.add_argument('--resume_path', type=str, nargs='?', default=None, help='Path to model checkpoint to resume training')
-    parser.add_argument('--dms_transitions_path', type=str, nargs='?', default=None, help="Path to DMS transitions")
     parser.add_argument('--weight_decay', type=float, default=0.01, help='Weight decay')
     parser.add_argument('--use_attention_bias', action='store_true', help='Use attention bias')
     parser.add_argument('--dropout_p', type=float, default=0.1, help='Dropout probability')
     parser.add_argument('--grad_clip', type=float, default = 0.1, help="Gradient clip value (default = 0.1)")
     parser.add_argument('--name_addon', type=str, nargs="?", default=None, help="additional name arguments")
-    parser.add_argument('--label_smoothing', type=float, default=0.0, help='Label smoothing')
-    parser.add_argument('--rate_matrix_path', type=str, nargs="?", help='Path to rate matrix')
+    parser.add_argument('--wandb_entity', type=str, nargs = "?", default=None, help='Wandb entity name')
+    parser.add_argument('--wandb_project', type=str, nargs = "?", default=None, help='Wandb project name')
 
     args = parser.parse_args()
     print(args)
     if args.seed is None and (args.accelerator =='gpu' and args.devices > 1):
         raise ValueError("Must set seed when using multiple GPUs")
     
-    if args.label_smoothing > 0.0 and args.rate_matrix_path is None:
-        raise ValueError("Must provide rate matrix path when using label smoothing")
-
     main(args)
