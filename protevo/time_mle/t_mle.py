@@ -22,7 +22,7 @@ from protevo import io
 from protevo.models import PeintTransformer
 from protevo.models.training import PeintLightningModule
 from protevo.models._flash_esm import ESM2Flash
-from protevo.simulation._simulate_on_tree import load_model
+from protevo.models._loading import load_model
 
 def load_peint_esm2_150M(
     model_path,
@@ -197,6 +197,7 @@ def estimate_transition_times(
     
     model, vocab = load_model(
         model_checkpoint_path = model_checkpoint_path,
+        use_cached_model = False,
         device = device
     )
 

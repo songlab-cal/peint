@@ -1,8 +1,8 @@
 from ._alisim import (
     simulate_alisim_evolution
 )
+from protevo.models._loading import load_model
 from ._simulate_on_tree import (
-    load_model,
     simulate_peint_evolution_down_tree
 )
 

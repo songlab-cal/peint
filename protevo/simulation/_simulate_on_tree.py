@@ -1,4 +1,4 @@
-import os, sys
+import os
 import random
 from functools import partial
 
@@ -7,129 +7,54 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-import pandas as pd
 import esm
 import logging
 import tqdm
 from typing import List, Dict, Tuple, Optional
-from ete3 import Tree as Tree_ete
 from collections import deque
-import multiprocessing 
+import multiprocessing
 import time
 
 from protevo import caching as protevo_caching
 from protevo.caching import secure_parallel_output
-from protevo.models._flash_esm import ESM2Flash
-from protevo.utils import amino_acids, get_process_args, write_msa, read_msa
-
-from protevo.models import PeintGenerator
-from protevo.models.training import PeintLightningModule
+from protevo.utils import get_process_args, write_msa, read_msa
+from protevo.models._loading import load_model
 
 from protevo.io import (
     Tree,
     read_tree
 )
-STANDARD_STATES = list(amino_acids) + ['<eos>']
 
-def seed_everything(seed):
+def _seed_all(seed):
+    torch.manual_seed(seed)
     np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
+    random.seed(seed)
 
-def load_model(
-    model_checkpoint_path: str,
-    device: torch.device,
-    model_type: str = 'PeintTransformer',
-    **kwargs
-):
-    #kwargs can update some of the 
-    vocab = esm.data.Alphabet.from_architecture("ESM-1b")
-
-    #esm_model, _ = esm.pretrained.esm2_t30_150M_UR50D()
-    flash_esm = ESM2Flash(
-        # num_layers = esm_model.num_layers,
-        # embed_dim = esm_model.embed_dim,
-        # attention_heads = esm_model.attention_heads,
-        num_layers=30,
-        embed_dim=640,
-        attention_heads=20,
-        alphabet ='ESM-1b',
-        token_dropout = True,
-        dropout_p = 0.0
-    )
-
-    #flash_esm.load_state_dict(esm_model.state_dict(), strict=False)
-    #del(esm_model)
-
-    sd = torch.load(model_checkpoint_path, map_location='cpu')
-
-    model_hparams = sd['hyper_parameters']
-
-    model_hparams.update(kwargs)
-
-    module = PeintLightningModule(
-        esm_model = flash_esm,
-        esm_vocab = vocab,
-        **model_hparams
-    )
-
-    module.load_state_dict(sd['state_dict'])
-
-    if model_type == 'Cached_Transformer':
-        model = PeintGenerator(
-            esm_model = flash_esm,
-            esm_vocab = vocab,
-            **model_hparams
-        )
-
-        model.load_state_dict(module.model.state_dict())
-
-        return model.eval().to(device), vocab
-        
-    return module.model.eval().to(device), vocab
-
-def set_seed(seed):
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+def prepare_batch(parent_sequences, branch_lengths, vocab):
+    x_toks = encode_and_pad_sequences(parent_sequences, vocab, 'cpu')
+    time = torch.tensor(branch_lengths, dtype=torch.float32).unsqueeze(1)
+    return x_toks, time
 
 def encode_and_pad_sequences(sequences: List[str], vocab, device):
     encoded_sequences = []
     for seq in sequences:
         encoded = torch.tensor([vocab.cls_idx] + vocab.encode(seq) + [vocab.eos_idx], device=device)
         encoded_sequences.append(encoded)
-    
+
     padded_sequences = nn.utils.rnn.pad_sequence(encoded_sequences, batch_first=True, padding_value=vocab.padding_idx)
     return padded_sequences
 
 def rejection_filter(x, length, ratio):
     return (1 - ratio) * length < x < (1 + ratio) * length
 
-def load_msa_and_tree_already_split(data_dir, family_name):
-    '''If you don't know which of the train/test MSAs will be used for training'''
-    #get train or test
-    train_msa_file = os.path.join(data_dir, 'output_train_msa_dir', family_name)
-    test_msa_file = os.path.join(data_dir, 'output_test_msa_dir', family_name)
-    train_tree_file = os.path.join(data_dir, 'output_train_tree_dir', family_name)
-    test_tree_file = os.path.join(data_dir, 'output_test_tree_dir', family_name)
-
-    train_seqs = {r.id: str(r.seq) for r in SeqIO.parse(train_msa_file, "fasta")}
-    test_seqs = {r.id: str(r.seq) for r in SeqIO.parse(test_msa_file, "fasta")}
-
-    if 'seq1' in train_seqs:
-        return read_tree(train_tree_file), train_seqs
-    else:
-        return read_tree(test_tree_file), test_seqs
-    
 def load_msa_and_tree(
         msa_dir:str,
         tree_dir:str,
         family_name:str) -> Tuple[Tree, Dict[str, str]]:
-    
+
     if not family_name.endswith('.txt'):
         family_name = family_name + '.txt'
-    
+
     msa_file = os.path.join(msa_dir, family_name)
     tree_file = os.path.join(tree_dir, family_name)
 
@@ -137,34 +62,34 @@ def load_msa_and_tree(
     tree = read_tree(tree_file)
 
     return tree, msa
-    
+
 def filter_sequences(decoded_sequences, length_criterion, likelihood_fn=None, x_toks=None, times=None):
     """
     Filter sequences based on length and likelihood criteria.
-    
+
     Args:
         decoded_sequences: List of sequences to filter
         length_criterion: Function that takes sequence length and returns bool
         likelihood_fn: Optional function to calculate sequence likelihoods
         x_toks: Input sequences tensor for likelihood calculation
         times: Time points tensor for likelihood calculation
-    
+
     Returns:
         str: The chosen sequence
     """
-    filtered_indices = [i for i, seq in enumerate(decoded_sequences) 
+    filtered_indices = [i for i, seq in enumerate(decoded_sequences)
                        if length_criterion(len(seq))]
-    
+
     if not filtered_indices:
         return None
-    
+
     filtered_sequences = [decoded_sequences[i] for i in filtered_indices]
-    
+
     if likelihood_fn and x_toks is not None and times is not None:
         # Select corresponding x_toks and times for filtered sequences
         filtered_x_toks = x_toks[filtered_indices]
         filtered_times = times[filtered_indices]
-        
+
         likelihoods = likelihood_fn(filtered_sequences, filtered_x_toks, filtered_times)
         chosen_idx = likelihoods.argmax().item()
         chosen_sequence = filtered_sequences[chosen_idx]
@@ -183,7 +108,7 @@ def calculate_sequence_likelihoods(
 ) -> torch.Tensor:
     """
     Calculate mean per-token likelihood for each sequence in the batch.
-    
+
     Args:
         model: The transformer model
         sequences: List of candidate sequences to evaluate
@@ -191,37 +116,37 @@ def calculate_sequence_likelihoods(
         times: Time points tensor [batch_size, 1]
         vocab: The vocabulary object
         device: torch device
-    
+
     Returns:
         torch.Tensor: Mean per-token likelihood for each sequence
     """
     # Prepare input and target sequences
     y_input = []
     y_target = []
-    
+
     for seq in sequences:
         y_input.append(torch.tensor([vocab.cls_idx] + vocab.encode(seq), device=device))
         y_target.append(torch.tensor(vocab.encode(seq) + [vocab.eos_idx], device=device))
-    
+
 
     y_inputs = nn.utils.rnn.pad_sequence(y_input, batch_first=True, padding_value=vocab.padding_idx)
     y_targets = nn.utils.rnn.pad_sequence(y_target, batch_first=True, padding_value=vocab.padding_idx)
-    
+
     y_padding_mask = y_inputs.eq(vocab.padding_idx)
     x_padding_mask = x_toks.eq(vocab.padding_idx)
-    
+
     with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
         with torch.no_grad():
             output = model(x_toks, y_inputs, times, x_padding_mask, y_padding_mask)
-    
+
     if isinstance(output, tuple):
         y_logits = output[-1]
     else:
         y_logits = output
 
     loss = F.cross_entropy(
-        y_logits.transpose(1, 2), 
-        y_targets,                 
+        y_logits.transpose(1, 2),
+        y_targets,
         ignore_index=vocab.padding_idx,
         reduction='none'
     )
@@ -229,18 +154,18 @@ def calculate_sequence_likelihoods(
     non_pad_mask = ~y_targets.eq(vocab.padding_idx)
 
     mean_loss = (loss * non_pad_mask).sum(dim=1) / non_pad_mask.sum(dim=1)
-    
+
     return -mean_loss  # Return negative loss as likelihood
 
 def create_likelihood_function(model, vocab, device):
     """
     Creates a likelihood function to be used in sequence filtering.
-    
+
     Args:
         model: The transformer model
         vocab: The vocabulary object
         device: torch device
-    
+
     Returns:
         function: A likelihood function that takes sequences and returns their scores
     """
@@ -255,116 +180,6 @@ def create_likelihood_function(model, vocab, device):
         )
 
     return likelihood_fn
-
-def simulate_evolution_with_rejection_sampling(
-        model,
-        root_sequence,
-        tree,
-        vocab,
-        device,
-        max_decode_steps,
-        max_batch_size,
-        n_sequences=5,
-        p_threshold=1.0,
-        length_criterion=lambda x: 50 <= x <= 200,
-        use_likelihood_filtering: bool =False,
-        likelihood_eval_model = None,
-        max_retries=3,
-        branch_scale_factor = 1.0,
-        seed=42):
-    
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-
-    def prepare_batch(parent_sequences, branch_lengths, vocab):
-        x_toks = encode_and_pad_sequences(parent_sequences, vocab, 'cpu')
-        time = torch.tensor(branch_lengths, dtype=torch.float32).unsqueeze(1)
-        return x_toks, time
-
-    all_sequences = {}
-    queue = deque([(tree, root_sequence, list(tree.children), 0)])  # (node, sequence, remaining_children, retry_count)
-
-    if use_likelihood_filtering:
-        likelihood_fn = create_likelihood_function(
-            model if not likelihood_eval_model else likelihood_eval_model, 
-            vocab, 
-            device)
-    else:
-        likelihood_fn = None
-
-    while queue:
-        batch_nodes = []
-        batch_sequences = []
-        batch_branch_lengths = []
-        batch_retry_counts = []
-        
-        effective_branch_count = max_batch_size // n_sequences
-        
-        while queue and len(batch_nodes) < max_batch_size:
-            node, parent_sequence, remaining_children, retry_count = queue.popleft()
-            if remaining_children:
-                child = remaining_children.pop(0)
-                batch_nodes.extend([child] * n_sequences)
-                batch_sequences.extend([parent_sequence] * n_sequences)
-                batch_branch_lengths.extend([child.dist * branch_scale_factor] * n_sequences)
-                batch_retry_counts.extend([retry_count] * n_sequences)
-                
-                if remaining_children:
-                    queue.appendleft((node, parent_sequence, remaining_children, retry_count))
-                
-                if len(batch_nodes) // n_sequences >= effective_branch_count:
-                    break
-        
-        if not batch_nodes:
-            continue
-        
-        x_toks, time = prepare_batch(batch_sequences, batch_branch_lengths, vocab)
-        x_toks, time = x_toks.to(device), time.to(device)
-        
-        with torch.autocast(device_type = "cuda", dtype = torch.bfloat16):
-            decoded_sequences = model.generate(x = x_toks, 
-                                            t = time,
-                                            device = device,
-                                            max_decode_steps = max_decode_steps, 
-                                            p = p_threshold)
-        
-        for i in range(0, len(batch_nodes), n_sequences):
-            node = batch_nodes[i]
-            node_sequences = decoded_sequences[i:i+n_sequences]
-            retry_count = batch_retry_counts[i]
-
-            chosen_sequence = filter_sequences(
-                node_sequences, 
-                length_criterion,
-                likelihood_fn,
-                x_toks=x_toks[i:i+n_sequences],
-                times=time[i:i+n_sequences]
-            )
-
-            if hasattr(model, '_reset_kv_cache'):
-                #if this is the cached model, reset the cache
-                #this should happen prior to next round of generation
-                model._reset_kv_cache()
-            
-            #chosen_sequence = filter_sequences(node_sequences, length_criterion, likelihood_fn)
-
-            if chosen_sequence is None:
-                if retry_count < max_retries:
-                    # Add the parent node back to the left of the queue for another try
-                    parent_node = node.up
-                    queue.appendleft((parent_node, all_sequences.get(parent_node.name, root_sequence), [node], retry_count + 1))
-                else:
-                    # If max retries reached, use a random sequence from the generated ones
-                    chosen_sequence = random.choice(node_sequences)
-            
-            if chosen_sequence is not None:
-                all_sequences[node.name] = chosen_sequence
-                if not node.is_leaf():
-                    queue.append((node, chosen_sequence, list(node.children), 0))  # Reset retry count for child nodes
-
-    return all_sequences
-
 
 def simulate_evolution_with_rejection_sampling_batched(
         model,
@@ -382,17 +197,10 @@ def simulate_evolution_with_rejection_sampling_batched(
         max_retries=3,
         branch_scale_factor = 1.0,
         seed=42):
-    
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    random.seed(seed)
+
+    _seed_all(seed)
 
     assert(all([hasattr(t, 'treename') for t in trees])), "All trees must have a 'treename' attribute"
-
-    def prepare_batch(parent_sequences, branch_lengths, vocab):
-        x_toks = encode_and_pad_sequences(parent_sequences, vocab, 'cpu')
-        time = torch.tensor(branch_lengths, dtype=torch.float32).unsqueeze(1)
-        return x_toks, time
 
     all_sequences = {tree.treename: {} for tree in trees}
     starting_points = []
@@ -407,8 +215,8 @@ def simulate_evolution_with_rejection_sampling_batched(
 
     if use_likelihood_filtering:
         likelihood_fn = create_likelihood_function(
-            model if not likelihood_eval_model else likelihood_eval_model, 
-            vocab, 
+            model if not likelihood_eval_model else likelihood_eval_model,
+            vocab,
             device)
     else:
         likelihood_fn = None
@@ -419,9 +227,9 @@ def simulate_evolution_with_rejection_sampling_batched(
         batch_branch_lengths = []
         batch_retry_counts = []
         batch_tree_names = []
-        
+
         effective_branch_count = max_batch_size // n_sequences
-        
+
         while queue and len(batch_nodes) < max_batch_size:
             node, parent_sequence, remaining_children, retry_count = queue.popleft()
             if remaining_children:
@@ -431,26 +239,26 @@ def simulate_evolution_with_rejection_sampling_batched(
                 batch_branch_lengths.extend([child.dist * branch_scale_factor] * n_sequences)
                 batch_retry_counts.extend([retry_count] * n_sequences)
                 batch_tree_names.extend([node.treename] * n_sequences)
-                
+
                 if remaining_children:
                     queue.appendleft((node, parent_sequence, remaining_children, retry_count))
-                
+
                 if len(batch_nodes) // n_sequences >= effective_branch_count:
                     break
-        
+
         if not batch_nodes:
             continue
-        
+
         x_toks, time = prepare_batch(batch_sequences, batch_branch_lengths, vocab)
         x_toks, time = x_toks.to(device), time.to(device)
-        
+
         with torch.autocast(device_type = "cuda", dtype = torch.bfloat16):
-            decoded_sequences = model.generate(x = x_toks, 
+            decoded_sequences = model.generate(x = x_toks,
                                             t = time,
                                             device = device,
-                                            max_decode_steps = max_decode_steps, 
+                                            max_decode_steps = max_decode_steps,
                                             p = p_threshold)
-        
+
         for i in range(0, len(batch_nodes), n_sequences):
             node = batch_nodes[i]
             node_sequences = decoded_sequences[i:i+n_sequences]
@@ -460,7 +268,7 @@ def simulate_evolution_with_rejection_sampling_batched(
             length_criterion = rejection_sampling_length_ratio[tree_name] #indexed by tree_name
 
             chosen_sequence = filter_sequences(
-                node_sequences, 
+                node_sequences,
                 length_criterion,
                 likelihood_fn,
                 x_toks=x_toks[i:i+n_sequences],
@@ -471,8 +279,6 @@ def simulate_evolution_with_rejection_sampling_batched(
                 #if this is the cached model, reset the cache
                 #this should happen prior to next round of generation
                 model._reset_kv_cache()
-            
-            #chosen_sequence = filter_sequences(node_sequences, length_criterion, likelihood_fn)
 
             if chosen_sequence is None:
                 if retry_count < max_retries:
@@ -482,7 +288,7 @@ def simulate_evolution_with_rejection_sampling_batched(
                 else:
                     # If max retries reached, use a random sequence from the generated ones
                     chosen_sequence = random.choice(node_sequences)
-            
+
             if chosen_sequence is not None:
                 #picked a sequence
                 total_decoded_nodes += 1
@@ -512,15 +318,7 @@ def simulate_leaves_from_root(
         seed: int = 42
 ):
 
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-
-    def prepare_batch(parent_sequences, branch_lengths, vocab):
-        x_toks = encode_and_pad_sequences(parent_sequences, vocab, 'cpu')
-        time = torch.tensor(branch_lengths, dtype=torch.float32).unsqueeze(1)
-        return x_toks, time
-    
+    _seed_all(seed)
 
     max_decode_steps = 2 * len(initial_sequence) #to be on safe side, ideally it will terminate earlier
 
@@ -536,8 +334,8 @@ def simulate_leaves_from_root(
 
     if use_likelihood_filtering:
         likelihood_fn = create_likelihood_function(
-            model if not likelihood_eval_model else likelihood_eval_model, 
-            vocab, 
+            model if not likelihood_eval_model else likelihood_eval_model,
+            vocab,
             device)
     else:
         likelihood_fn = None
@@ -559,27 +357,27 @@ def simulate_leaves_from_root(
 
             if len(batch_nodes) >= max_batch_size:
                 break
-        
+
         if not batch_nodes:
             continue
 
         x_toks, time = prepare_batch(batch_sequences, batch_branch_lengths, vocab)
         x_toks, time = x_toks.to(device), time.to(device)
-        
+
         with torch.autocast(device_type = "cuda", dtype = torch.bfloat16):
-            decoded_sequences = model.generate(x = x_toks, 
+            decoded_sequences = model.generate(x = x_toks,
                                             t = time,
                                             device = device,
-                                            max_decode_steps = max_decode_steps, 
+                                            max_decode_steps = max_decode_steps,
                                             p = p_threshold)
-        
+
         for i in range(0, len(batch_nodes), n_sequences):
             node = batch_nodes[i]
             node_sequences = decoded_sequences[i:i+n_sequences]
             retry_count = batch_retry_counts[i]
 
             chosen_sequence = filter_sequences(
-                node_sequences, 
+                node_sequences,
                 length_criterion,
                 likelihood_fn,
                 x_toks=x_toks[i:i+n_sequences],
@@ -590,8 +388,6 @@ def simulate_leaves_from_root(
                 #if this is the cached model, reset the cache
                 #this should happen prior to next round of generation
                 model._reset_kv_cache()
-            
-            #chosen_sequence = filter_sequences(node_sequences, rejection_sampling_func, likelihood_fn)
 
             if chosen_sequence is None:
                 if retry_count < 3:
@@ -641,12 +437,12 @@ def simulate_families_with_rejection_sampling_batched(
         # Use default median length sequence from MSA
         else:
             tree, msa = load_msa_and_tree(msa_dir=msa_dir, tree_dir=tree_dir, family_name=family_name)
-            
+
             #find the median sequence length
             sorted_seqs = sorted(msa.items(), key = lambda x: len(x[1]))
             median_idx = len(sorted_seqs) // 2
 
-            initial_label, initial_seq = sorted_seqs[median_idx] 
+            initial_label, initial_seq = sorted_seqs[median_idx]
 
         tree_ete = tree.to_ete3()
         reroot_node = tree_ete&initial_label
@@ -707,8 +503,8 @@ def simulate_families_with_rejection_sampling_batched(
     return simulated, trees, root_sequences, root_labels
 
 def _map_func_simulate_peint_evolution(map_args):
-    msa_dir, tree_dir, root_sequences_dir, families, model, vocab, single_shot, device, n_sequences_to_sample, max_batch_size, nucleus_sampling_p, ratio_rejection_sampling, use_likelihood_filtering, random_seed, output_sequences_dir = map_args 
-    seed_everything(random_seed)
+    msa_dir, tree_dir, root_sequences_dir, families, model, vocab, single_shot, device, n_sequences_to_sample, max_batch_size, nucleus_sampling_p, ratio_rejection_sampling, use_likelihood_filtering, random_seed, output_sequences_dir = map_args
+    _seed_all(random_seed)
 
     simulated, _, root_seqs, _ = simulate_families_with_rejection_sampling_batched(
         msa_dir=msa_dir,
@@ -765,7 +561,7 @@ def simulate_peint_evolution_down_tree(
     assert msa_dir or root_sequences_dir, "Didn't receive an msa or root sequence directory. There is no way to construct a starting sequence for simulation"
     assert (msa_dir and not root_sequences_dir) or (root_sequences_dir and not msa_dir), "Received both an msa and root sequences directory. Only one may be used to pick a root sequence for simulation."
 
-    model, vocab = load_model(model_path, device, model_type='Cached_Transformer')
+    model, vocab = load_model(model_path, use_cached_model=True, device=device)
     map_args = [
         [
             msa_dir,
