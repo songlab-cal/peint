@@ -14,6 +14,7 @@ from typing import List, Dict, Tuple, Optional
 from collections import deque
 import multiprocessing
 import time
+from ete3 import Tree
 
 from protevo import caching as protevo_caching
 from protevo.caching import secure_parallel_output
@@ -21,7 +22,6 @@ from protevo.utils import get_process_args, write_msa, read_msa
 from protevo.models._loading import load_model
 
 from protevo.io import (
-    Tree,
     read_tree
 )
 
