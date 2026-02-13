@@ -19,9 +19,10 @@ We used `flash-attn==2.7.0.post2`
 git clone https://github.com/songlab-cal/peint.git
 cd peint
 
-# 1. Install PyTorch (match your CUDA version)
+# 1. Install PyTorch (match your CUDA version) and Einops prior to installing Flash Attention
 # See https://pytorch.org/get-started/locally/
 pip install torch --index-url https://download.pytorch.org/whl/cu121  # example for CUDA 12.1
+pip install einops==0.8.1
 
 # 2. (Recommended) Install Flash Attention for faster training/inference
 # Requires Ampere+ GPU. See installation.md for troubleshooting.
