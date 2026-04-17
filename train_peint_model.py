@@ -9,6 +9,7 @@ from lightning.pytorch.callbacks import LearningRateMonitor
 import esm
 
 from protevo.models._flash_esm import ESM2Flash
+from protevo.models import ESM2_REGISTRY, get_esm_model
 from protevo.models.training import (
     PeintLightningModule,
     ValidationLikelihoodCallback,
@@ -32,25 +33,27 @@ def main(args):
         np.random.shuffle(families)
         families = families[:args.n_families]
 
+    loader, esm_embed_dim = get_esm_model(args.esm_model)
+    if args.embed_dim != esm_embed_dim:
+        print(f"WARNING: --embed_dim ({args.embed_dim}) does not match "
+              f"{args.esm_model} embed_dim ({esm_embed_dim}). Overriding to {esm_embed_dim}.")
+        args.embed_dim = esm_embed_dim
+
     if args.resume_path:
         run_name = args.resume_path.split('/')[-2]
     else:
         date = str(datetime.datetime.now().date()).replace('-','')
         run_name = (f"{date}-{args.num_encoder_layers}e"
                     f"{args.num_decoder_layers}d{args.num_heads}h"
-                    f"{args.embed_dim}d-{len(families)}fams"
+                    f"{args.embed_dim}d-{args.esm_model}-{len(families)}fams"
                     )
         if args.name_addon:
             run_name = run_name + '-' + args.name_addon
 
     logger = pl.pytorch.loggers.wandb.WandbLogger(name=run_name, project=args.wandb_project, entity=args.wandb_entity)
 
-    print(f"Loaded ESM Model")
-
-    # should be able to load whatever ESM model you want - make sure that the dimensions and
-    # stuff match up with the arguments you pass to the PeintLightningModule
-    esm_model, esm_vocab = esm.pretrained.esm2_t30_150M_UR50D()
-    #esm_model, esm_vocab = esm.pretrained.esm2_t12_35M_UR50D()
+    esm_model, esm_vocab = loader()
+    print(f"Loaded ESM Model: {args.esm_model}")
 
     flash_esm_model = ESM2Flash(
         num_layers=esm_model.num_layers,
@@ -161,6 +164,9 @@ if __name__ == "__main__":
     parser.add_argument('--name_addon', type=str, nargs="?", default=None, help="additional name arguments")
     parser.add_argument('--wandb_entity', type=str, nargs = "?", default=None, help='Wandb entity name')
     parser.add_argument('--wandb_project', type=str, nargs = "?", default=None, help='Wandb project name')
+    parser.add_argument('--esm_model', type=str, default='ESM2-150M',
+                        choices=list(ESM2_REGISTRY.keys()),
+                        help='Base ESM2 model (determines and overrides embed_dim)')
 
     args = parser.parse_args()
     print(args)
