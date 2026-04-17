@@ -29,4 +29,6 @@ srun python train_esmtransformer.py \
 --weight_decay 0.01 \
 --grad_clip 1.0 \
 --use_attention_bias \
---name_addon cts_dms 
+--esm_model ESM2-150M \
+--name_addon cts_dms
+
