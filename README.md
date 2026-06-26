@@ -38,6 +38,22 @@ pip install -e ".[train]"
 # For development
 pip install -e ".[dev]"
 ```
+
+## Model Checkpoints
+
+The trained checkpoints are distributed separately as `peint_model_checkpoints.zip`. Unzip it at the repository root to create the `model_checkpoints/` directory:
+
+```bash
+unzip peint_model_checkpoints.zip   # creates model_checkpoints/peint.ckpt and model_checkpoints/vep.ckpt
+```
+
+| Checkpoint | Description |
+|------------|-------------|
+| `model_checkpoints/peint.ckpt` | Base PEINT model — sequence generation, likelihood evaluation, and time estimation. |
+| `model_checkpoints/vep.ckpt` | Model for variant effect prediction (see `vep.ipynb`). |
+
+These are lightweight **PEINT-only** checkpoints: they contain just the trained PEINT layers. The ESM2 backbone (`esm2_t30_150M_UR50D`) is downloaded automatically from the public release the first time a model is loaded.
+
 ## Quick Start
 
 ### Loading a Pretrained Model
@@ -50,7 +66,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Load model (use_flash=False for compatibility with all GPUs)
 model, vocab = load_model(
-    'checkpoints/model.ckpt',
+    'model_checkpoints/peint.ckpt',
     use_cached_model=True,
     device=device,
     use_flash=False
@@ -72,7 +88,7 @@ print(generated[0])
 from protevo.models import load_model
 import torch
 
-model, vocab = load_model('checkpoints/model.ckpt', use_cached_model=False, device='cuda', use_flash=False)
+model, vocab = load_model('model_checkpoints/peint.ckpt', use_cached_model=False, device='cuda', use_flash=False)
 
 x = "ACDEFGHIK"
 y = "ACDEYGHIK"
@@ -98,6 +114,28 @@ nll = torch.nn.functional.cross_entropy(
 )
 print(f"NLL: {nll.item():.4f}")
 ```
+
+### Variant Effect Prediction
+
+Load `vep.ckpt` as an `evaluator` and score many variants against a wild-type sequence with `evaluate_likelihood`. This works with or without Flash Attention (it falls back to the standard-attention model automatically).
+
+```python
+from protevo.models import load_peint_model
+import torch
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model, vocab = load_peint_model('model_checkpoints/vep.ckpt', device=device, model_type='evaluator')
+
+wild_type = "ACDEFGHIKLMNPQRSTVWY"
+variants = ["ACDEFGHIKLMNPQRSTVWY", "ACDEYGHIKLMNPQRSTVWY"]  # mutant sequences
+
+# Per-residue negative log-likelihood of each variant given the wild type at t=1.
+# Higher likelihood (lower NLL) => more wild-type-like / higher predicted fitness.
+nlls = model.evaluate_likelihood(x=wild_type, y=variants, t=[1.0] * len(variants), device=device)
+print(nlls)
+```
+
+See `vep.ipynb` for an end-to-end example on deep mutational scanning data.
 
 ### Homology Detection
 
