@@ -29,7 +29,7 @@ from ._transformer import (
     PeintEvaluator,
 )
 
-from ._loading import load_model
+from ._loading import load_model, load_peint_model
 from ._esm_registry import ESM2_REGISTRY, get_esm_model
 
 __all__ = [
@@ -46,8 +46,9 @@ __all__ = [
     "PeintTransformerVanilla",
     "PeintGenerator",
     "PeintEvaluator",
-    # Loading function
+    # Loading functions
     "load_model",
+    "load_peint_model",
     # ESM registry
     "ESM2_REGISTRY",
     "get_esm_model",

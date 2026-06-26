@@ -19,6 +19,8 @@ model_checkpoints/
 *.ckpt
 *.pt
 *.pth
+# distribution bundles of weights (e.g. peint_model_checkpoints.zip)
+*.zip
 *.safetensors
 
 # Training logs

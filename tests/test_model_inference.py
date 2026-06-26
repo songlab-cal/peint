@@ -104,3 +104,44 @@ class TestModelGeneration:
         valid_aas = set("ACDEFGHIKLMNPQRSTVWY")
         for char in generated[0]:
             assert char in valid_aas, f"Invalid amino acid: {char}"
+
+
+class TestLikelihoodEvaluation:
+    """Test evaluate_likelihood, which must work with or without Flash Attention.
+
+    The loaded_model fixture uses the standard-attention (Vanilla) model, so these
+    tests exercise the non-Flash likelihood path.
+    """
+
+    @pytest.mark.integration
+    def test_evaluate_likelihood_shape_and_finite(self, loaded_model, example_transition, device):
+        """evaluate_likelihood returns one finite NLL per target sequence."""
+        model, vocab = loaded_model
+        x, y, t = example_transition
+
+        nlls = np.atleast_1d(model.evaluate_likelihood(
+            x=x, y=[y, y, y], t=[t, t, t], device=device, batch_size=8
+        ))
+
+        assert nlls.shape == (3,)
+        assert np.isfinite(nlls).all()
+        # Identical targets must receive identical scores (deterministic).
+        assert np.allclose(nlls, nlls[0])
+
+    @pytest.mark.integration
+    def test_evaluate_likelihood_batching_consistent(self, loaded_model, example_transition, device):
+        """Scores are independent of batch size (single vs multiple batches)."""
+        model, vocab = loaded_model
+        x, y, t = example_transition
+
+        targets = [x, y, y, x, y]
+        times = [t] * len(targets)
+
+        one_batch = np.atleast_1d(model.evaluate_likelihood(
+            x=x, y=targets, t=times, device=device, batch_size=len(targets)
+        ))
+        many_batches = np.atleast_1d(model.evaluate_likelihood(
+            x=x, y=targets, t=times, device=device, batch_size=2
+        ))
+
+        assert np.allclose(one_batch, many_batches, atol=1e-4)

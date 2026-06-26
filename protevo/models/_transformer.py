@@ -284,6 +284,122 @@ class _PeintTransformerBase(nn.Module, ABC):
                 y_logits = result[1] if isinstance(result, tuple) else result
         return y_logits
 
+    def encode_sequences(self, sequences: List[str], targets: bool = False) -> tuple:
+        """Encode sequences into padded token tensors.
+
+        Args:
+            sequences: List of amino acid strings
+            targets: If True, also return target tokens (input shifted for
+                teacher-forced likelihood evaluation)
+
+        Returns:
+            Tuple of (padded_inputs, padded_targets or None)
+        """
+        encoded_inputs = []
+        encoded_targets = []
+        for seq in sequences:
+            encoded_core = self.vocab.encode(seq)
+            if targets:
+                encoded_inputs.append(torch.tensor([self.vocab.cls_idx] + encoded_core))
+                encoded_targets.append(torch.tensor(encoded_core + [self.vocab.eos_idx]))
+            else:
+                encoded_inputs.append(
+                    torch.tensor([self.vocab.cls_idx] + encoded_core + [self.vocab.eos_idx])
+                )
+
+        padded_inputs = nn.utils.rnn.pad_sequence(
+            encoded_inputs, batch_first=True, padding_value=self.vocab.padding_idx
+        )
+        if targets:
+            padded_targets = nn.utils.rnn.pad_sequence(
+                encoded_targets, batch_first=True, padding_value=self.vocab.padding_idx
+            )
+            return padded_inputs, padded_targets
+
+        return padded_inputs, None
+
+    def _likelihood_logits(
+        self,
+        batch_idx: int,
+        x: torch.Tensor,
+        y: torch.Tensor,
+        t: torch.Tensor,
+        x_attn_mask: torch.Tensor,
+        y_attn_mask: torch.Tensor
+    ) -> torch.Tensor:
+        """Target logits for one likelihood batch.
+
+        Default (uncached) path used by every model type. Precision follows
+        ``evaluate_transition_logits``, which is overridden per model type
+        (Flash variants use bfloat16, Vanilla uses fp32). ``PeintEvaluator``
+        overrides this to add encoder caching.
+        """
+        return self.evaluate_transition_logits(x, y, t, x_attn_mask, y_attn_mask)
+
+    def _reset_likelihood_cache(self) -> None:
+        """Hook to clear per-call caches after likelihood evaluation (no-op by default)."""
+        pass
+
+    @torch.no_grad()
+    def evaluate_likelihood(
+        self,
+        x: str,
+        y: List[str],
+        t: List[float],
+        device: torch.device,
+        batch_size: int = 128
+    ) -> np.ndarray:
+        """Evaluate likelihood of target sequences given a source sequence.
+
+        Works for all model variants regardless of Flash Attention: Flash models
+        run in bfloat16, Vanilla runs in fp32, and ``PeintEvaluator`` additionally
+        caches the encoder across batches for speed.
+
+        Args:
+            x: Single source sequence string
+            y: List of target sequence strings
+            t: List of evolutionary times (same length as y)
+            device: Target device
+            batch_size: Batch size for evaluation
+
+        Returns:
+            Array of mean per-residue negative log-likelihoods (one per target)
+        """
+        assert len(t) == len(y), "Time and sequences must be the same length"
+
+        likelihoods = []
+        encoded_x, _ = self.encode_sequences([x])
+
+        for i in tqdm(range(0, len(y), batch_size)):
+            y_batch = y[i:i + batch_size]
+            y_encoded, y_targets = self.encode_sequences(y_batch, targets=True)
+            y_encoded = y_encoded.to(device)
+            y_targets = y_targets.to(device)
+            y_attn_mask = y_encoded.eq(self.vocab.padding_idx)
+
+            x_encoded = encoded_x.repeat(y_encoded.size(0), 1).to(device)
+            x_attn_mask = x_encoded.eq(self.vocab.padding_idx)
+
+            times = torch.tensor(t[i:i + batch_size]).unsqueeze(-1).to(device)
+
+            logits = self._likelihood_logits(
+                i, x_encoded, y_encoded, times, x_attn_mask, y_attn_mask
+            )
+
+            ll = nn.functional.cross_entropy(
+                logits.float().transpose(1, 2),
+                y_targets,
+                ignore_index=self.vocab.padding_idx,
+                reduction='none'
+            )
+
+            non_pad = y_targets.ne(self.vocab.padding_idx)
+            ll = (ll * non_pad).sum(dim=-1) / non_pad.sum(dim=-1)
+            likelihoods.append(ll.cpu().numpy())
+
+        self._reset_likelihood_cache()
+        return np.vstack([ll[:, None] for ll in likelihoods]).squeeze()
+
 
 ######################################
 # Flash Attention Transformer Models #
@@ -567,40 +683,6 @@ class PeintEvaluator(PeintTransformer):
             ) for l in range(self.num_decoder_layers)
         ])
 
-    def encode_sequences(self, sequences: List[str], targets: bool = False) -> tuple:
-        """Encode sequences using vocab.
-
-        Args:
-            sequences: List of amino acid strings
-            targets: If True, split into input/target for likelihood evaluation
-
-        Returns:
-            Tuple of (padded_inputs, padded_targets or None)
-        """
-        encoded_inputs = []
-        encoded_targets = []
-        for seq in sequences:
-            encoded_core = self.vocab.encode(seq)
-            if targets:
-                input_seq = torch.tensor([self.vocab.cls_idx] + encoded_core)
-                target_seq = torch.tensor(encoded_core + [self.vocab.eos_idx])
-                encoded_inputs.append(input_seq)
-                encoded_targets.append(target_seq)
-            else:
-                seq_tensor = torch.tensor([self.vocab.cls_idx] + encoded_core + [self.vocab.eos_idx])
-                encoded_inputs.append(seq_tensor)
-
-        padded_inputs = nn.utils.rnn.pad_sequence(
-            encoded_inputs, batch_first=True, padding_value=self.vocab.padding_idx
-        )
-        if targets:
-            padded_targets = nn.utils.rnn.pad_sequence(
-                encoded_targets, batch_first=True, padding_value=self.vocab.padding_idx
-            )
-            return padded_inputs, padded_targets
-
-        return padded_inputs, None
-
     def forward(
         self,
         x: torch.Tensor,
@@ -649,62 +731,24 @@ class PeintEvaluator(PeintTransformer):
 
         return self.lm_head(h_y)
 
-    @torch.no_grad()
-    def evaluate_likelihood(
+    def _likelihood_logits(
         self,
-        x: str,
-        y: List[str],
-        t: List[float],
-        device: torch.device,
-        batch_size: int = 128
-    ) -> np.ndarray:
-        """Evaluate likelihood of target sequences given a source sequence.
+        batch_idx: int,
+        x: torch.Tensor,
+        y: torch.Tensor,
+        t: torch.Tensor,
+        x_attn_mask: torch.Tensor,
+        y_attn_mask: torch.Tensor
+    ) -> torch.Tensor:
+        """Encoder-cached logits: encode the source once, reuse for later batches."""
+        with torch.no_grad():
+            with torch.autocast(device_type=x.device.type, dtype=torch.bfloat16):
+                return self(
+                    x, y, t, x_attn_mask, y_attn_mask, use_cache=batch_idx > 0
+                )
 
-        Caches encoder after first batch for efficiency when evaluating many targets.
-
-        Args:
-            x: Single source sequence string
-            y: List of target sequence strings
-            t: List of evolutionary times (same length as y)
-            device: Target device
-            batch_size: Batch size for evaluation
-
-        Returns:
-            Array of negative log-likelihoods for each target
-        """
-        assert len(t) == len(y), "Time and sequences must be the same length"
-
-        likelihoods = []
-        encoded_x, _ = self.encode_sequences([x])
-
-        for i in tqdm(range(0, len(y), batch_size)):
-            y_batch = y[i:i + batch_size]
-            y_encoded, y_targets = self.encode_sequences(y_batch, targets=True)
-            y_encoded = y_encoded.to(device)
-            y_targets = y_targets.to(device)
-            y_attn_mask = y_encoded.eq(self.vocab.padding_idx)
-
-            x_encoded = encoded_x.repeat(y_encoded.size(0), 1).to(device)
-            x_attn_mask = x_encoded.eq(self.vocab.padding_idx)
-
-            times = torch.tensor(t[i:i + batch_size]).unsqueeze(-1).to(device)
-
-            use_cache = i > 0
-            logits = self(x_encoded, y_encoded, times, x_attn_mask, y_attn_mask, use_cache=use_cache)
-
-            ll = nn.functional.cross_entropy(
-                logits.transpose(1, 2),
-                y_targets,
-                ignore_index=self.vocab.padding_idx,
-                reduction='none'
-            )
-
-            non_pad = y_targets.ne(self.vocab.padding_idx)
-            ll = (ll * non_pad).sum(dim=-1) / non_pad.sum(dim=-1)
-            likelihoods.append(ll.cpu().numpy())
-
+    def _reset_likelihood_cache(self) -> None:
         self.reset_kv_cache()
-        return np.vstack([ll[:, None] for ll in likelihoods]).squeeze()
 
     def reset_kv_cache(self):
         """Reset encoder KV caches in all decoder layers."""

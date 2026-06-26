@@ -1,15 +1,19 @@
 #!/bin/bash
-#SBATCH --job-name=1k_cts_dms
-#SBATCH --output=logs/output/%j.log  
-#SBATCH --error=logs/error/%j.log    
-#SBATCH --time=14-00:00:00        
-#SBATCH --partition=yss
-#SBATCH --gres=gpu:2  
+#SBATCH --job-name=peint_train
+#SBATCH --output=logs/output/%j.log
+#SBATCH --error=logs/error/%j.log
+#SBATCH --time=14-00:00:00
+#SBATCH --partition=gpu          # set to your cluster's GPU partition
+#SBATCH --gres=gpu:2
 
-srun python train_esmtransformer.py \
---data_path /scratch/users/akoehl/protein-evolution/local_data/1k_original_gapless_512l \
---families_file /scratch/users/akoehl/protein-evolution/local_data/1k_dms_data.json \
---output_dir /scratch/users/matthew_liu/protevo_checkpoints \
+# Example training launch. Replace the placeholder paths with your own:
+#   --data_path      directory of transition data
+#   --families_file  json file describing the protein families
+#   --output_dir     where to write checkpoints
+srun python train_peint_model.py \
+--data_path /path/to/transitions \
+--families_file /path/to/families.json \
+--output_dir checkpoints \
 --batch_size 32 \
 --lr 4e-4 \
 --max_seq_len 1022 \
@@ -31,4 +35,3 @@ srun python train_esmtransformer.py \
 --use_attention_bias \
 --esm_model ESM2-150M \
 --name_addon cts_dms
-

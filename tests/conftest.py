@@ -11,13 +11,19 @@ MODEL_CHECKPOINT_DIR = os.path.join(os.path.dirname(__file__), '..', 'model_chec
 
 
 def get_checkpoint_path():
-    """Find the first available checkpoint in model_checkpoints directory."""
+    """Locate the PEINT base checkpoint used by the reference-logits fixtures.
+
+    Prefers ``peint.ckpt`` (the model that ``y_logits.npy`` / ``example_transition``
+    were generated from); otherwise falls back to the first checkpoint in sorted
+    order for determinism.
+    """
     if not os.path.exists(MODEL_CHECKPOINT_DIR):
         return None
-    checkpoints = [f for f in os.listdir(MODEL_CHECKPOINT_DIR) if f.endswith('.ckpt')]
+    checkpoints = sorted(f for f in os.listdir(MODEL_CHECKPOINT_DIR) if f.endswith('.ckpt'))
     if not checkpoints:
         return None
-    return os.path.join(MODEL_CHECKPOINT_DIR, checkpoints[0])
+    preferred = 'peint.ckpt' if 'peint.ckpt' in checkpoints else checkpoints[0]
+    return os.path.join(MODEL_CHECKPOINT_DIR, preferred)
 
 
 @pytest.fixture(scope="session")
