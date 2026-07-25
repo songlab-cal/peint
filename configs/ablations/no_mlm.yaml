@@ -5,8 +5,9 @@
 # --- data ---
 data_path: /scratch/users/spa-evolution-yss/protevo/data/tr_rosetta/15k_gapless_scale_1024l
 families_file: /scratch/users/spa-evolution-yss/protevo/data/tr_rosetta/14k5_fam.json
-output_dir: /scratch/users/spa-evolution-yss/protevo/checkpoints/ablations/no_mlm
+output_dir: /scratch/users/yufan.cao/protevo_ablations/no_mlm
 n_families: -1
+wandb_project: peint-ablations
 
 # --- optimization ---
 batch_size: 32
