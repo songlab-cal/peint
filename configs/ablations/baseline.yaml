@@ -1,6 +1,9 @@
 # Published PEINT baseline — the reference point for all referee #3.3 ablations.
-# Canonical full-scale training config (confirmed by Antoine): the large effective
-# batch targets ~250k tokens per gradient update (32 * 6 accum * 4 GPUs * ~1022 tok).
+# Effective batch matches the published training (confirmed by Antoine): ~250k tokens
+# / 768 sequences per gradient update. The published run used 4 GPUs x accumulate 6;
+# here we use 2 GPUs x accumulate 12 (same 768 = 32*12*2), because the yss partition
+# schedules 2 A100s promptly while 4 contiguous A100s were days out. Same effective
+# batch, LR schedule, and step count => equivalent optimization (see rebuttal notes).
 # Consumed by: python train_peint_model.py --config configs/ablations/baseline.yaml
 # Every ablation copies this file and changes ONLY its one axis, for a controlled comparison.
 
@@ -16,7 +19,7 @@ batch_size: 32
 lr: 3.0e-4
 weight_decay: 0.01
 grad_clip: 1.0
-accumulate_grad_batches: 6
+accumulate_grad_batches: 12   # 2 GPUs -> keep 768-seq effective batch (32*12*2 = published 32*6*4)
 max_steps: 300000
 num_warmup_steps: 2000
 
@@ -40,6 +43,6 @@ mask_prob: 0.15
 # --- runtime / bookkeeping ---
 seed: 0
 accelerator: gpu
-devices: [0, 1, 2, 3]
+devices: [0, 1]
 checkpoint_every: 4000
 name_addon: baseline

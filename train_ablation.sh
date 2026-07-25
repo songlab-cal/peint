@@ -2,8 +2,8 @@
 #SBATCH --job-name=peint_ablation
 #SBATCH --partition=yss
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=4
-#SBATCH --gres=gpu:A100:4
+#SBATCH --ntasks-per-node=2
+#SBATCH --gres=gpu:A100:2
 #SBATCH --cpus-per-task=8
 #SBATCH --time=14-00:00:00
 #SBATCH --output=/scratch/users/yufan.cao/protevo_ablations/logs/%x-%j.out
@@ -11,8 +11,11 @@
 #
 # Full-scale ablation training launcher (referee #3.3).
 #
-# Reproduces the published PEINT setup: 4x A100, DDP, bf16, effective batch
-# ~250k tokens/update (batch 32 * accumulate 6 * 4 GPUs * ~1022 tokens).
+# Runs on 2x A100 (DDP, bf16) with the SAME effective batch as the published
+# 4-GPU setup: the configs set accumulate_grad_batches=12, so
+#   batch 32 * accumulate 12 * 2 GPUs = 768 seqs/update (~250k tokens),
+# identical to the published 32 * 6 * 4. (2 GPUs is what the yss partition can
+# schedule promptly; 4 contiguous A100s were days out.)
 #
 # Usage:
 #   sbatch --job-name=peint_no_mlm train_ablation.sh configs/ablations/no_mlm.yaml
@@ -25,7 +28,10 @@ set -eo pipefail
 CONFIG="${1:?usage: sbatch train_ablation.sh configs/ablations/<name>.yaml [--override ...]}"
 shift || true
 
-source ~/.bashrc
+# Initialize conda in the (non-interactive) batch shell. Sourcing ~/.bashrc is not
+# reliable here (it returns early for non-interactive shells), so source conda.sh
+# directly, then activate the project env.
+source /usr/local/linux/miniforge-3.13/etc/profile.d/conda.sh
 conda activate prot-evo
 
 cd /scratch/users/yufan.cao/peint-dev/rebuttal/peint

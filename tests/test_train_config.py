@@ -49,7 +49,8 @@ def test_shipped_baseline_config_valid():
     assert args.num_encoder_layers == 5 and args.num_decoder_layers == 5
     assert args.embed_dim == 640 and args.num_heads == 20
     assert args.esm_model == "ESM2-150M"
-    assert args.devices == [0, 1, 2, 3]
+    assert args.devices == [0, 1]
+    assert args.accumulate_grad_batches == 12  # 2-GPU protocol; 32*12*2 = 768 seqs/update
     assert args.lr == pytest.approx(3e-4)
 
 
