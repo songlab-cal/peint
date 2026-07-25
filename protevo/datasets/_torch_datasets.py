@@ -53,6 +53,23 @@ class PeintDataset(Dataset):
         # so transition indexing matches the original loader exactly.
         token_dtype = np.int8 if len(vocab) <= 128 else np.int16
 
+        # Vectorized tokenization. Calling vocab.encode() per sequence is ~2 ms/call
+        # for fair-esm's Alphabet (~18 h over the full dataset). Instead build a
+        # 256-entry char->token-id lookup table once and map residues with numpy,
+        # which is ~1000x faster and byte-identical: encoding is purely per-residue.
+        # 'J' is not in the ESM vocab, so it maps to 'I' (the original .replace).
+        import string as _string
+        # Default entry = the vocab's unknown token (matches encode() on chars the
+        # vocab doesn't know); fall back to padding for minimal vocabs without one.
+        _lut_default = getattr(vocab, "unk_idx", getattr(vocab, "padding_idx", 0))
+        token_lut = np.full(256, _lut_default, dtype=token_dtype)
+        for _c in _string.ascii_uppercase + "-.":
+            try:
+                token_lut[ord(_c)] = vocab.encode(_c)[0]
+            except Exception:
+                pass
+        token_lut[ord("J")] = token_lut[ord("I")]
+
         x_lengths, y_lengths = [], []
         self.lengths, self.t = [], []
         for filename in infiles:
@@ -87,8 +104,10 @@ class PeintDataset(Dataset):
                     d = line.rstrip('\n').split()
                     if len(d[0]) > max_len or len(d[1]) > max_len:
                         continue
-                    x_buf[self.x_off[i]:self.x_off[i + 1]] = vocab.encode(d[0].replace("J", "I"))
-                    y_buf[self.y_off[i]:self.y_off[i + 1]] = vocab.encode(d[1].replace("J", "I"))
+                    x_buf[self.x_off[i]:self.x_off[i + 1]] = \
+                        token_lut[np.frombuffer(d[0].encode("ascii"), dtype=np.uint8)]
+                    y_buf[self.y_off[i]:self.y_off[i + 1]] = \
+                        token_lut[np.frombuffer(d[1].encode("ascii"), dtype=np.uint8)]
                     i += 1
 
         # Guard that the compact store is lossless: any token index that exceeded the
