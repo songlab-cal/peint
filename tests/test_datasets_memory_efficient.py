@@ -108,12 +108,18 @@ def test_storage_is_compact():
     with tempfile.TemporaryDirectory() as d:
         _write(os.path.join(d, "fam.txt"), ROWS)
         ds = PeintDataset(d, vocab=VOCAB, families=["fam"], max_len=1024)
-    # Tokens live in one flat int8/int16 buffer (not millions of per-item tensors)
-    assert ds.x_buf.dtype in (torch.int8, torch.int16)
-    assert ds.y_buf.dtype in (torch.int8, torch.int16)
+    # Tokens live in ONE flat buffer (not millions of per-item tensors). For the
+    # standard ESM vocab (33 tokens) that buffer is int8 -> this is the path the
+    # bit-identity test above exercises.
+    assert len(VOCAB) <= 128
+    assert ds.x_buf.dtype == torch.int8
+    assert ds.y_buf.dtype == torch.int8
     x0, y0, t0, _ = ds[0]
-    assert x0.dtype in (torch.int8, torch.int16) and y0.dtype in (torch.int8, torch.int16)
+    assert x0.dtype == torch.int8 and y0.dtype == torch.int8
     assert isinstance(t0, float)  # scalar, not a per-residue tensor
+    # Lossless: the compact store round-trips to the exact original indices.
+    import torch as _t
+    assert _t.equal(x0.long(), _t.tensor(VOCAB.encode(ROWS[0][0].replace("J", "I"))))
 
 
 def test_returned_tokens_are_long_for_the_model():

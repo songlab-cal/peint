@@ -91,6 +91,14 @@ class PeintDataset(Dataset):
                     y_buf[self.y_off[i]:self.y_off[i + 1]] = vocab.encode(d[1].replace("J", "I"))
                     i += 1
 
+        # Guard that the compact store is lossless: any token index that exceeded the
+        # dtype range would have silently wrapped to a negative value on assignment.
+        # (Indices are 0..len(vocab)-1 by construction, so this never triggers for
+        # ESM2/ESM-C; it hard-fails instead of corrupting data if a vocab ever grows.)
+        if n:
+            assert x_buf.min() >= 0 and x_buf.max() < len(vocab), "token store overflow"
+            assert y_buf.min() >= 0 and y_buf.max() < len(vocab), "token store overflow"
+
         self.x_buf = torch.from_numpy(x_buf)
         self.y_buf = torch.from_numpy(y_buf)
 
