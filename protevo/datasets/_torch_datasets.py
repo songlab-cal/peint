@@ -5,6 +5,7 @@ This module contains data loading utilities that do not require Lightning.
 
 import os
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -35,45 +36,71 @@ class PeintDataset(Dataset):
         self.families = families
         self.vocab = vocab
 
-        data = []
-
         infiles = [family + '.txt' for family in families] if len(families) != 0 \
               else list(filter(lambda x: x.endswith('.txt'), os.listdir(data_path)))
 
+        # Tokens are held in ONE flat contiguous buffer with per-transition offsets,
+        # not one small tensor per transition. Millions of tiny tensor objects carry
+        # huge Python/torch overhead (measured ~100 GB/rank for the full dataset); a
+        # flat int8 buffer (the ESM vocab is < 128 tokens) plus offsets holds the exact
+        # same indices in ~10 GB/rank. Since every DDP rank loads the whole dataset,
+        # this is what lets it fit on shared nodes. Values are cast back to long in the
+        # collator, so the batch fed to the model is unchanged.
+        #
+        # Two passes over the files: pass 1 records lengths/times only (no sequences
+        # retained, so peak memory stays tiny); pass 2 fills a preallocated buffer. The
+        # file/line iteration order and the max_len filter are identical across passes,
+        # so transition indexing matches the original loader exactly.
+        token_dtype = np.int8 if len(vocab) <= 128 else np.int16
+
+        x_lengths, y_lengths = [], []
+        self.lengths, self.t = [], []
         for filename in infiles:
             with open(os.path.join(data_path, filename), 'r') as file_handle:
                 file_handle.readline()  # skip header
                 for line in file_handle:
-                    data.append(line.rstrip('\n').split())
+                    d = line.rstrip('\n').split()
+                    if len(d[0]) > max_len or len(d[1]) > max_len:
+                        continue
+                    # encode() maps one residue -> one token, so encoded len == string len
+                    x_lengths.append(len(d[0]))
+                    y_lengths.append(len(d[1]))
+                    self.lengths.append(len(d[0]))
+                    # Time is constant across a sequence and the collator only uses one
+                    # value per transition, so store a single clamped scalar.
+                    self.t.append(max(float(d[2]), MIN_TIME_THRESHOLD))
 
-        # filter out sequences longer than max_len
-        data = list(filter(lambda x: len(x[0]) <= max_len and len(x[1]) <= max_len, data))
+        n = len(self.lengths)
+        self.x_off = np.zeros(n + 1, dtype=np.int64)
+        self.y_off = np.zeros(n + 1, dtype=np.int64)
+        if n:
+            self.x_off[1:] = np.cumsum(x_lengths)
+            self.y_off[1:] = np.cumsum(y_lengths)
+        x_buf = np.empty(int(self.x_off[-1]), dtype=token_dtype)
+        y_buf = np.empty(int(self.y_off[-1]), dtype=token_dtype)
 
-        # ESM's vocab has all ambiguous aa codes other than J, so we replace it here.
-        # Tokens are stored as int16 (vocab has ~33 tokens, far below 2**15) instead of
-        # the default int64: an 8x-smaller token store that keeps the exact indices. They
-        # are cast back to long in the collator, so the batch fed to the model is
-        # unchanged. Without this, holding the whole tokenized dataset in memory needs
-        # ~100 GB/rank (and each DDP rank loads all of it), which OOMs shared nodes.
-        self.x = [
-            torch.tensor(vocab.encode(d[0].replace("J", "I")), dtype=torch.int16) for d in data
-        ]
-        self.y = [
-            torch.tensor(vocab.encode(d[1].replace("J", "I")), dtype=torch.int16) for d in data
-        ]
+        i = 0
+        for filename in infiles:
+            with open(os.path.join(data_path, filename), 'r') as file_handle:
+                file_handle.readline()  # skip header
+                for line in file_handle:
+                    d = line.rstrip('\n').split()
+                    if len(d[0]) > max_len or len(d[1]) > max_len:
+                        continue
+                    x_buf[self.x_off[i]:self.x_off[i + 1]] = vocab.encode(d[0].replace("J", "I"))
+                    y_buf[self.y_off[i]:self.y_off[i + 1]] = vocab.encode(d[1].replace("J", "I"))
+                    i += 1
 
-        self.lengths = [len(d[0]) for d in data]
-
-        # Time is constant across a sequence, and the collator only ever uses one value
-        # per transition, so store a single scalar (clamped to MIN_TIME_THRESHOLD) rather
-        # than a per-residue float32 vector. Expanded back to per-residue in the model.
-        self.t = [max(float(d[2]), MIN_TIME_THRESHOLD) for d in data]
+        self.x_buf = torch.from_numpy(x_buf)
+        self.y_buf = torch.from_numpy(y_buf)
 
     def __len__(self):
-        return len(self.x)
+        return len(self.lengths)
 
     def __getitem__(self, idx):
-        return self.x[idx], self.y[idx], self.t[idx], self.lengths[idx]
+        x = self.x_buf[int(self.x_off[idx]):int(self.x_off[idx + 1])]
+        y = self.y_buf[int(self.y_off[idx]):int(self.y_off[idx + 1])]
+        return x, y, self.t[idx], self.lengths[idx]
 
 
 class PeintCollator:

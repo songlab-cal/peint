@@ -108,9 +108,12 @@ def test_storage_is_compact():
     with tempfile.TemporaryDirectory() as d:
         _write(os.path.join(d, "fam.txt"), ROWS)
         ds = PeintDataset(d, vocab=VOCAB, families=["fam"], max_len=1024)
-    assert ds.x[0].dtype == torch.int16
-    assert ds.y[0].dtype == torch.int16
-    assert isinstance(ds.t[0], float)  # scalar, not a per-residue tensor
+    # Tokens live in one flat int8/int16 buffer (not millions of per-item tensors)
+    assert ds.x_buf.dtype in (torch.int8, torch.int16)
+    assert ds.y_buf.dtype in (torch.int8, torch.int16)
+    x0, y0, t0, _ = ds[0]
+    assert x0.dtype in (torch.int8, torch.int16) and y0.dtype in (torch.int8, torch.int16)
+    assert isinstance(t0, float)  # scalar, not a per-residue tensor
 
 
 def test_returned_tokens_are_long_for_the_model():
