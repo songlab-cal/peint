@@ -488,18 +488,30 @@ class PeintTransformer(_PeintTransformerBase):
         h_x = self._compute_language_model_representations(x)
         x_attn_mask, y_attn_mask = self._prepare_attention_masks(x_attn_mask, y_attn_mask)
 
-        for i, enc_layer in enumerate(self.enc_layers):
-            h_x = enc_layer(x=h_x, x_padding_mask=x_attn_mask)
-
-            if self.num_decoder_layers - self.num_encoder_layers + i >= 0:
-                idx = self.num_decoder_layers - self.num_encoder_layers + i
-                dec_layer = self.dec_layers[idx]
+        if self.num_encoder_layers == 0:
+            # Ablation "remove extra encoder layers": the frozen backbone output is
+            # used directly as fixed decoder memory; every decoder layer cross-
+            # attends to it (there are no encoder layers to refine h_x).
+            for dec_layer in self.dec_layers:
                 h_y = dec_layer(
                     x=h_y,
                     y=h_x,
                     x_padding_mask=y_attn_mask,
                     y_padding_mask=x_attn_mask
                 )
+        else:
+            for i, enc_layer in enumerate(self.enc_layers):
+                h_x = enc_layer(x=h_x, x_padding_mask=x_attn_mask)
+
+                if self.num_decoder_layers - self.num_encoder_layers + i >= 0:
+                    idx = self.num_decoder_layers - self.num_encoder_layers + i
+                    dec_layer = self.dec_layers[idx]
+                    h_y = dec_layer(
+                        x=h_y,
+                        y=h_x,
+                        x_padding_mask=y_attn_mask,
+                        y_padding_mask=x_attn_mask
+                    )
 
         x_logits = self.lm_head(h_x)
         y_logits = self.lm_head(h_y)
@@ -595,18 +607,29 @@ class PeintGenerator(PeintTransformer):
         if not use_cache:
             h_x = self._compute_language_model_representations(x)
 
-            for i, enc_layer in enumerate(self.enc_layers):
-                h_x = enc_layer(x=h_x, x_padding_mask=x_attn_mask)
-
-                if self.num_decoder_layers - self.num_encoder_layers + i >= 0:
-                    idx = self.num_decoder_layers - self.num_encoder_layers + i
-                    dec_layer = self.dec_layers[idx]
+            if self.num_encoder_layers == 0:
+                # No extra encoder: every decoder layer cross-attends to (and
+                # caches) the frozen backbone representation as fixed memory.
+                for dec_layer in self.dec_layers:
                     h_y = dec_layer(
                         x=h_y,
                         y=h_x,
                         x_padding_mask=y_attn_mask,
                         y_padding_mask=x_attn_mask
                     )
+            else:
+                for i, enc_layer in enumerate(self.enc_layers):
+                    h_x = enc_layer(x=h_x, x_padding_mask=x_attn_mask)
+
+                    if self.num_decoder_layers - self.num_encoder_layers + i >= 0:
+                        idx = self.num_decoder_layers - self.num_encoder_layers + i
+                        dec_layer = self.dec_layers[idx]
+                        h_y = dec_layer(
+                            x=h_y,
+                            y=h_x,
+                            x_padding_mask=y_attn_mask,
+                            y_padding_mask=x_attn_mask
+                        )
         else:
             for dec_layer in self.dec_layers:
                 h_y = dec_layer(
@@ -723,18 +746,29 @@ class PeintEvaluator(PeintTransformer):
         if not use_cache:
             h_x = self._compute_language_model_representations(x)
 
-            for i, enc_layer in enumerate(self.enc_layers):
-                h_x = enc_layer(x=h_x, x_padding_mask=x_attn_mask)
-
-                if self.num_decoder_layers - self.num_encoder_layers + i >= 0:
-                    idx = self.num_decoder_layers - self.num_encoder_layers + i
-                    dec_layer = self.dec_layers[idx]
+            if self.num_encoder_layers == 0:
+                # No extra encoder: every decoder layer cross-attends to (and
+                # caches) the frozen backbone representation as fixed memory.
+                for dec_layer in self.dec_layers:
                     h_y = dec_layer(
                         x=h_y,
                         y=h_x,
                         x_padding_mask=y_attn_mask,
                         y_padding_mask=x_attn_mask
                     )
+            else:
+                for i, enc_layer in enumerate(self.enc_layers):
+                    h_x = enc_layer(x=h_x, x_padding_mask=x_attn_mask)
+
+                    if self.num_decoder_layers - self.num_encoder_layers + i >= 0:
+                        idx = self.num_decoder_layers - self.num_encoder_layers + i
+                        dec_layer = self.dec_layers[idx]
+                        h_y = dec_layer(
+                            x=h_y,
+                            y=h_x,
+                            x_padding_mask=y_attn_mask,
+                            y_padding_mask=x_attn_mask
+                        )
         else:
             for dec_layer in self.dec_layers:
                 h_y = dec_layer(
@@ -846,23 +880,37 @@ class PeintTransformerVanilla(_PeintTransformerBase):
         self_attentions = {}
         cross_attentions = {}
 
-        for i, enc_layer in enumerate(self.enc_layers):
-            h_x, attn = enc_layer(x=h_x, attn_mask=x_attn_mask)
-            representations[f'encoder_{i}'] = h_x
-            self_attentions[f'encoder_{i}'] = attn
-
-            if self.num_decoder_layers - self.num_encoder_layers + i >= 0:
-                idx = self.num_decoder_layers - self.num_encoder_layers + i
-                dec_layer = self.dec_layers[idx]
+        if self.num_encoder_layers == 0:
+            # No extra encoder: decoder cross-attends directly to the frozen
+            # backbone representation (used as fixed memory) at every layer.
+            for j, dec_layer in enumerate(self.dec_layers):
                 h_y, (self_att, cross_att) = dec_layer(
                     x=h_y,
                     y=h_x,
                     x_attn_mask=y_attn_mask,
                     y_attn_mask=x_attn_mask
                 )
-                representations[f'decoder_{i}'] = h_y
-                self_attentions[f'decoder_{i}'] = self_att
-                cross_attentions[f'decoder_{i}'] = cross_att
+                representations[f'decoder_{j}'] = h_y
+                self_attentions[f'decoder_{j}'] = self_att
+                cross_attentions[f'decoder_{j}'] = cross_att
+        else:
+            for i, enc_layer in enumerate(self.enc_layers):
+                h_x, attn = enc_layer(x=h_x, attn_mask=x_attn_mask)
+                representations[f'encoder_{i}'] = h_x
+                self_attentions[f'encoder_{i}'] = attn
+
+                if self.num_decoder_layers - self.num_encoder_layers + i >= 0:
+                    idx = self.num_decoder_layers - self.num_encoder_layers + i
+                    dec_layer = self.dec_layers[idx]
+                    h_y, (self_att, cross_att) = dec_layer(
+                        x=h_y,
+                        y=h_x,
+                        x_attn_mask=y_attn_mask,
+                        y_attn_mask=x_attn_mask
+                    )
+                    representations[f'decoder_{i}'] = h_y
+                    self_attentions[f'decoder_{i}'] = self_att
+                    cross_attentions[f'decoder_{i}'] = cross_att
 
         x_logits = self.lm_head(h_x)
         y_logits = self.lm_head(h_y)

@@ -7,7 +7,6 @@ automatically handling both full checkpoints and PEINT-only checkpoints.
 
 import torch
 import torch.nn as nn
-import esm
 from esm.data import Alphabet
 from pathlib import Path
 from typing import Tuple, Optional, Dict, Any
@@ -15,11 +14,10 @@ import logging
 
 from protevo.models._transformer_modules import FLASH_AVAILABLE
 
+# Backbone construction is centralized in _esm_registry.build_esm_backbone; the
+# concrete ESM2Flash/ESM2Model classes are imported there, not here.
 if FLASH_AVAILABLE:
-    from protevo.models._flash_esm import ESM2Flash
     from protevo.models._transformer import PeintTransformer, PeintGenerator, PeintEvaluator
-else:
-    from protevo.models._flash_esm import ESM2Model
 
 from protevo.models._transformer import PeintTransformerVanilla
 
@@ -50,60 +48,29 @@ def _is_peint_only_checkpoint(state_dict: Dict[str, Any]) -> bool:
     return not has_esm_params
 
 
-def _load_esm_model(use_flash: bool = True) -> nn.Module:
+def _load_esm_model(
+    backbone_name: str = "ESM2-150M", use_flash: bool = True
+) -> nn.Module:
     """
-    Load ESM2 model from pretrained weights.
+    Build the pretrained backbone module for a given registry name.
+
+    Thin wrapper around :func:`protevo.models._esm_registry.build_esm_backbone`
+    (the single source of truth shared with training), kept for backward
+    compatibility. Returns only the module; callers that also need the vocab
+    should call ``build_esm_backbone`` directly.
 
     Args:
-        use_flash: Whether to use Flash Attention version (if available)
+        backbone_name: Registry key (e.g. ``"ESM2-8M"``/``"ESM2-150M"``).
+        use_flash: Whether to use the Flash Attention version (if available).
 
     Returns:
-        ESM2 model instance with pretrained weights loaded
+        Backbone module instance with pretrained weights loaded.
     """
-    # Load standard ESM2 pretrained model first
-    logger.info("Loading pretrained ESM2 weights...")
-    esm_pretrained, _ = esm.pretrained.esm2_t30_150M_UR50D()
+    from protevo.models._esm_registry import build_esm_backbone
 
-    if use_flash and FLASH_AVAILABLE:
-        logger.info("Creating ESM2 model with Flash Attention support")
-        # Create Flash ESM model with same architecture
-        flash_esm = ESM2Flash(
-            num_layers=esm_pretrained.num_layers,
-            embed_dim=esm_pretrained.embed_dim,
-            attention_heads=esm_pretrained.attention_heads,
-            alphabet='ESM-1b',
-            token_dropout=True,
-            dropout_p=0.0
-        )
-
-        # Load pretrained weights
-        flash_esm.load_state_dict(esm_pretrained.state_dict(), strict=False)
-        del esm_pretrained
-
-        return flash_esm
-    else:
-        if not FLASH_AVAILABLE:
-            logger.info("Flash Attention not available, using standard ESM2 model")
-        else:
-            logger.info("Loading standard ESM2 model (Flash Attention disabled)")
-
-        from protevo.models._flash_esm import ESM2Model
-
-        # Create ESM2Model with same architecture
-        esm_model = ESM2Model(
-            num_layers=esm_pretrained.num_layers,
-            embed_dim=esm_pretrained.embed_dim,
-            attention_heads=esm_pretrained.attention_heads,
-            alphabet='ESM-1b',
-            token_dropout=True,
-            dropout_p=0.0
-        )
-
-        # Load pretrained weights
-        esm_model.load_state_dict(esm_pretrained.state_dict(), strict=False)
-        del esm_pretrained
-
-        return esm_model
+    logger.info(f"Building backbone '{backbone_name}' (use_flash={use_flash})")
+    module, _vocab, _embed_dim = build_esm_backbone(backbone_name, use_flash=use_flash)
+    return module
 
 
 def load_peint_model(
@@ -194,45 +161,20 @@ def load_peint_model(
     else:
         logger.info("Detected full checkpoint (includes ESM parameters)")
 
-    # Load or create ESM model
-    if is_peint_only:
-        # Load ESM from pretrained
-        esm_model = _load_esm_model(use_flash=use_flash and FLASH_AVAILABLE)
-    else:
-        # Create ESM model structure (weights will be loaded from checkpoint)
-        # We need to create the model with the right architecture
-        logger.info("Creating ESM model structure for full checkpoint")
+    # Build the backbone structure for the checkpoint's configured size. The
+    # backbone name is read from the saved hyper-parameters (defaulting to the
+    # published ESM2-150M for older checkpoints predating this field), so a model
+    # trained on a different backbone rebuilds correctly instead of silently
+    # defaulting to 150M. For PEINT-only checkpoints the pretrained weights are
+    # used as-is; for full checkpoints they are overwritten by the checkpoint's
+    # state dict below.
+    from protevo.models._esm_registry import build_esm_backbone
 
-        # Get architecture info
-        temp_esm, _ = esm.pretrained.esm2_t30_150M_UR50D()
-
-        if use_flash and FLASH_AVAILABLE:
-            logger.info("Using Flash ESM model")
-            esm_model = ESM2Flash(
-                num_layers=temp_esm.num_layers,
-                embed_dim=temp_esm.embed_dim,
-                attention_heads=temp_esm.attention_heads,
-                alphabet='ESM-1b',
-                token_dropout=True,
-                dropout_p=0.0
-            )
-        else:
-            logger.info("Using standard ESM model")
-            from protevo.models._flash_esm import ESM2Model
-            esm_model = ESM2Model(
-                num_layers=temp_esm.num_layers,
-                embed_dim=temp_esm.embed_dim,
-                attention_heads=temp_esm.attention_heads,
-                alphabet='ESM-1b',
-                token_dropout=True,
-                dropout_p=0.0
-            )
-
-        del temp_esm
-        # ESM weights will be loaded from checkpoint via model.load_state_dict() below
-
-    # Create vocabulary
-    vocab = Alphabet.from_architecture("ESM-1b")
+    encoder_backbone = hyper_params.get('encoder_backbone', 'ESM2-150M')
+    logger.info(f"Backbone from hyper-parameters: {encoder_backbone}")
+    esm_model, vocab, _ = build_esm_backbone(
+        encoder_backbone, use_flash=use_flash and FLASH_AVAILABLE
+    )
 
     # Select model class based on Flash Attention and model type
     if use_flash and FLASH_AVAILABLE:

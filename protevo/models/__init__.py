@@ -30,7 +30,7 @@ from ._transformer import (
 )
 
 from ._loading import load_model, load_peint_model
-from ._esm_registry import ESM2_REGISTRY, get_esm_model
+from ._esm_registry import ESM2_REGISTRY, get_esm_model, build_esm_backbone
 
 __all__ = [
     # Configuration
@@ -52,4 +52,5 @@ __all__ = [
     # ESM registry
     "ESM2_REGISTRY",
     "get_esm_model",
+    "build_esm_backbone",
 ]

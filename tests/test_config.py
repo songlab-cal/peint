@@ -9,7 +9,6 @@ import pytest
 
 from protevo.models._config import PeintConfig
 
-
 BASE = dict(embed_dim=640, num_heads=20, num_encoder_layers=5, num_decoder_layers=5)
 
 

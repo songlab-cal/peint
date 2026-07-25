@@ -6,10 +6,8 @@ import datetime
 import numpy as np
 import lightning as pl
 from lightning.pytorch.callbacks import LearningRateMonitor
-import esm
 
-from protevo.models._flash_esm import ESM2Flash
-from protevo.models import ESM2_REGISTRY, get_esm_model
+from protevo.models import ESM2_REGISTRY, get_esm_model, build_esm_backbone
 from protevo.models.training import (
     PeintLightningModule,
     ValidationLikelihoodCallback,
@@ -33,7 +31,7 @@ def main(args):
         np.random.shuffle(families)
         families = families[:args.n_families]
 
-    loader, esm_embed_dim = get_esm_model(args.esm_model)
+    _, esm_embed_dim = get_esm_model(args.esm_model)
     if args.embed_dim != esm_embed_dim:
         print(f"WARNING: --embed_dim ({args.embed_dim}) does not match "
               f"{args.esm_model} embed_dim ({esm_embed_dim}). Overriding to {esm_embed_dim}.")
@@ -52,20 +50,9 @@ def main(args):
 
     logger = pl.pytorch.loggers.wandb.WandbLogger(name=run_name, project=args.wandb_project, entity=args.wandb_entity)
 
-    esm_model, esm_vocab = loader()
+    # Single source of truth for backbone construction (shared with _loading.py).
+    flash_esm_model, esm_vocab, _ = build_esm_backbone(args.esm_model, use_flash=True)
     print(f"Loaded ESM Model: {args.esm_model}")
-
-    flash_esm_model = ESM2Flash(
-        num_layers=esm_model.num_layers,
-        embed_dim=esm_model.embed_dim,
-        attention_heads=esm_model.attention_heads,
-        alphabet="ESM-1b",
-        token_dropout=True,
-        dropout_p=0.0, #ESM2 does not use dropout
-    )
-    flash_esm_model.load_state_dict(esm_model.state_dict(), strict=False) #the rot emb is different here, so there are mismatched keys
-    del(esm_model) #for some reason this is necessary for the pytorch lightning trainer??
-
 
     model_args = {
         "max_seq_len": args.max_seq_len,
@@ -79,6 +66,14 @@ def main(args):
         "weight_decay": args.weight_decay,
         "use_attention_bias": args.use_attention_bias,
         "dropout_p": args.dropout_p,
+        # Backbone + ablation axes (saved into hyper_parameters so the checkpoint
+        # rebuilds on the right backbone and remembers which axis was ablated).
+        "encoder_backbone": args.esm_model,
+        "mlm_weight": args.mlm_weight,
+        "use_time_conditioning": not args.no_time_conditioning,
+        "esm_finetune_mode": args.esm_finetune_mode,
+        "lora_rank": args.lora_rank,
+        "architecture": args.architecture,
     }
 
     data_args = {
@@ -87,6 +82,7 @@ def main(args):
         'vocab': esm_vocab,
         'max_len': args.max_seq_len,
         'batch_size': args.batch_size,
+        'mask_prob': args.mask_prob,
     }
 
     model = PeintLightningModule(
@@ -166,7 +162,24 @@ if __name__ == "__main__":
     parser.add_argument('--wandb_project', type=str, nargs = "?", default=None, help='Wandb project name')
     parser.add_argument('--esm_model', type=str, default='ESM2-150M',
                         choices=list(ESM2_REGISTRY.keys()),
-                        help='Base ESM2 model (determines and overrides embed_dim)')
+                        help='Base ESM2 backbone (determines and overrides embed_dim); '
+                             'saved as encoder_backbone in the checkpoint')
+
+    # --- Ablation axes (referee #3.3); defaults reproduce published PEINT ---
+    parser.add_argument('--mlm_weight', type=float, default=1.0,
+                        help='Weight on the auxiliary MLM loss (0.0 ablates it)')
+    parser.add_argument('--no_time_conditioning', action='store_true',
+                        help='Ablate evolutionary-time conditioning (drop the time embedding)')
+    parser.add_argument('--esm_finetune_mode', type=str, default='frozen',
+                        choices=['frozen', 'lora', 'full'],
+                        help='How to train the backbone (default: frozen)')
+    parser.add_argument('--lora_rank', type=int, default=None,
+                        help='LoRA rank; required when --esm_finetune_mode lora')
+    parser.add_argument('--architecture', type=str, default='encoder_decoder',
+                        choices=['encoder_decoder', 'decoder_only'],
+                        help='Model architecture (decoder_only is deferred)')
+    parser.add_argument('--mask_prob', type=float, default=0.15,
+                        help='MLM masking probability applied to the source sequence')
 
     args = parser.parse_args()
     print(args)

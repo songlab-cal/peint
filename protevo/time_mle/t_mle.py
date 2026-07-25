@@ -33,9 +33,10 @@ def load_peint_esm2_150M(
     device='cuda',
     eval=True
 ):
-    default_esm, default_vocab = esm.pretrained.esm2_t30_150M_UR50D() #uses the 150M model
-    esmmodel = ESM2Flash() #ESM2 rewritten using Flash Atten
-    esmmodel.load_state_dict(default_esm.state_dict(), strict=False)
+    # Build the 150M backbone through the shared registry (single source of truth,
+    # matches training and _loading.py) instead of a hardcoded default constructor.
+    from protevo.models import build_esm_backbone
+    esmmodel, default_vocab, _ = build_esm_backbone("ESM2-150M", use_flash=True)
 
     model = PeintTransformer(
         esm_model=esmmodel,
