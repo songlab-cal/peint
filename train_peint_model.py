@@ -130,9 +130,12 @@ def main(args):
         trainer.fit(model, dm)
 
 
-if __name__ == "__main__":
-
+def build_parser():
+    """Construct the training argument parser (also used by tests)."""
     parser = ArgumentParser()
+    parser.add_argument('--config', type=str, default=None,
+                        help='Optional YAML file of arguments (e.g. an ablation config). '
+                             'Its values act as defaults; explicit CLI flags override them.')
     parser.add_argument('--data_path', type=str, default='data/processed')
     parser.add_argument('--families_file', type=str, help='Path to json file containing family information')
     parser.add_argument('--output_dir', type=str, help='Directory to save model checkpoints')
@@ -156,10 +159,10 @@ if __name__ == "__main__":
     parser.add_argument('--weight_decay', type=float, default=0.01, help='Weight decay')
     parser.add_argument('--use_attention_bias', action='store_true', help='Use attention bias')
     parser.add_argument('--dropout_p', type=float, default=0.1, help='Dropout probability')
-    parser.add_argument('--grad_clip', type=float, default = 0.1, help="Gradient clip value (default = 0.1)")
+    parser.add_argument('--grad_clip', type=float, default=0.1, help="Gradient clip value (default = 0.1)")
     parser.add_argument('--name_addon', type=str, nargs="?", default=None, help="additional name arguments")
-    parser.add_argument('--wandb_entity', type=str, nargs = "?", default=None, help='Wandb entity name')
-    parser.add_argument('--wandb_project', type=str, nargs = "?", default=None, help='Wandb project name')
+    parser.add_argument('--wandb_entity', type=str, nargs="?", default=None, help='Wandb entity name')
+    parser.add_argument('--wandb_project', type=str, nargs="?", default=None, help='Wandb project name')
     parser.add_argument('--esm_model', type=str, default='ESM2-150M',
                         choices=list(ESM2_REGISTRY.keys()),
                         help='Base ESM2 backbone (determines and overrides embed_dim); '
@@ -180,10 +183,38 @@ if __name__ == "__main__":
                         help='Model architecture (decoder_only is deferred)')
     parser.add_argument('--mask_prob', type=float, default=0.15,
                         help='MLM masking probability applied to the source sequence')
+    return parser
 
-    args = parser.parse_args()
+
+def parse_args_with_config(argv=None):
+    """Parse CLI args, optionally seeded by a YAML ``--config`` file.
+
+    Precedence: hard-coded argparse defaults < YAML config < explicit CLI flags.
+    Unknown keys in the YAML fail loudly (a typo in an ablation config should not
+    be silently ignored). Falls back to plain CLI parsing when no config is given.
+    """
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.config is not None:
+        import yaml
+        with open(args.config) as f:
+            file_cfg = yaml.safe_load(f) or {}
+        valid_dests = {a.dest for a in parser._actions}
+        unknown = set(file_cfg) - valid_dests
+        if unknown:
+            raise ValueError(
+                f"Unknown keys in {args.config}: {sorted(unknown)}. "
+                f"Valid keys: {sorted(valid_dests)}"
+            )
+        parser.set_defaults(**file_cfg)
+        args = parser.parse_args(argv)  # re-parse so explicit CLI flags still win
+    return args
+
+
+if __name__ == "__main__":
+    args = parse_args_with_config()
     print(args)
-    if args.seed is None and (args.accelerator =='gpu' and args.devices > 1):
+    if args.seed is None and (args.accelerator == 'gpu' and args.devices > 1):
         raise ValueError("Must set seed when using multiple GPUs")
-    
+
     main(args)

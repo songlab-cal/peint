@@ -1,0 +1,44 @@
+# Published PEINT baseline — the reference point for all referee #3.3 ablations.
+# Canonical full-scale training config (confirmed by Antoine): the large effective
+# batch targets ~250k tokens per gradient update (32 * 6 accum * 4 GPUs * ~1022 tok).
+# Consumed by: python train_peint_model.py --config configs/ablations/baseline.yaml
+# Every ablation copies this file and changes ONLY its one axis, for a controlled comparison.
+
+# --- data (lives outside rebuttal/; edit if your mirror differs) ---
+data_path: /scratch/users/spa-evolution-yss/protevo/data/tr_rosetta/15k_gapless_scale_1024l
+families_file: /scratch/users/spa-evolution-yss/protevo/data/tr_rosetta/14k5_fam.json
+output_dir: /scratch/users/spa-evolution-yss/protevo/checkpoints/ablations/baseline
+n_families: -1
+
+# --- optimization ---
+batch_size: 32
+lr: 3.0e-4
+weight_decay: 0.01
+grad_clip: 1.0
+accumulate_grad_batches: 6
+max_steps: 300000
+num_warmup_steps: 2000
+
+# --- architecture (published PEINT) ---
+esm_model: ESM2-150M       # saved as encoder_backbone
+embed_dim: 640             # overridden to match the backbone anyway
+num_heads: 20
+num_encoder_layers: 5
+num_decoder_layers: 5
+max_seq_len: 1022
+dropout_p: 0.0
+use_attention_bias: true
+
+# --- ablation axes (defaults = published behavior) ---
+mlm_weight: 1.0
+no_time_conditioning: false
+esm_finetune_mode: frozen
+architecture: encoder_decoder
+mask_prob: 0.15
+
+# --- runtime / bookkeeping ---
+seed: 0
+accelerator: gpu
+devices: [0, 1, 2, 3]
+checkpoint_every: 4000
+name_addon: baseline

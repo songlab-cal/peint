@@ -47,6 +47,10 @@ class PeintLightningModule(pl.LightningModule):
         self.wd = kwargs.get("weight_decay", 0.0)
         self.num_warmup_steps = num_warmup_steps
         self.num_training_steps = num_training_steps
+        # Weight on the auxiliary MLM objective. Read from the model config so it
+        # round-trips with the checkpoint; fall back to the published default (1.0)
+        # for older checkpoints / configs that predate this field.
+        self.mlm_weight = getattr(self.model.config, "mlm_weight", 1.0)
         self.save_hyperparameters(ignore=["esm_model", "esm_vocab"])
 
     def forward(self, x, y, t, x_attn_mask, y_attn_mask):
@@ -71,31 +75,54 @@ class PeintLightningModule(pl.LightningModule):
                     sync_dist=True,
                 )
 
-    def training_step(self, batch, batch_idx):
-        [x, x_targets, y, y_targets, t, x_atten_mask, y_atten_mask] = batch
+    def _compute_losses(self, x_logits, y_logits, x_targets, y_targets):
+        """Weighted MLM + autoregressive training loss.
 
-        x_logits, y_logits = self(x, y, t, x_atten_mask, y_atten_mask)
+        Pure (no logging / Trainer state) so it is unit-testable in isolation.
+
+        The total loss is ``mlm_weight * mlm_loss + tlm_loss``:
+          - ``mlm_weight == 1.0`` (default) reproduces published PEINT exactly.
+          - ``mlm_weight == 0.0`` ablates the auxiliary MLM objective: the MLM term
+            is skipped entirely, so it contributes neither loss nor gradient (and
+            the encoder-side forward compute of it is avoided).
+          - other values scale the MLM term (kept fully general, not hard-coded).
+
+        Args:
+            x_logits, y_logits: model outputs [B, L, V] (source/MLM and target/AR).
+            x_targets, y_targets: token targets [B, L].
+
+        Returns:
+            Tuple ``(loss, metrics)`` where ``metrics`` holds loss/ppl components.
+        """
         x_logits = x_logits.transpose(-1, -2)
         y_logits = y_logits.transpose(-1, -2)
 
-        mlm_loss = self.model.x_criterion(x_logits, x_targets)
         tlm_loss = self.model.y_criterion(y_logits, y_targets)
 
-        mlm_ppl = torch.exp(mlm_loss.detach())
-        tlm_ppl = torch.exp(tlm_loss.detach())
+        if self.mlm_weight != 0.0:
+            mlm_loss = self.model.x_criterion(x_logits, x_targets)
+        else:
+            mlm_loss = torch.zeros((), device=tlm_loss.device, dtype=tlm_loss.dtype)
 
-        loss = mlm_loss + tlm_loss
+        loss = self.mlm_weight * mlm_loss + tlm_loss
 
         metrics = {
             "loss": loss,
             "mlm_loss": mlm_loss,
             "tlm_loss": tlm_loss,
-            "mlm_ppl": mlm_ppl,
-            "tlm_ppl": tlm_ppl,
+            "mlm_ppl": torch.exp(mlm_loss.detach()),
+            "tlm_ppl": torch.exp(tlm_loss.detach()),
         }
+        return loss, metrics
+
+    def training_step(self, batch, batch_idx):
+        [x, x_targets, y, y_targets, t, x_atten_mask, y_atten_mask] = batch
+
+        x_logits, y_logits = self(x, y, t, x_atten_mask, y_atten_mask)
+        loss, metrics = self._compute_losses(x_logits, y_logits, x_targets, y_targets)
 
         self._log(metrics, train=True)
-        return metrics["loss"]
+        return loss
 
     def validation_step(self, batch, batch_idx):
         [x, x_targets, y, y_targets, t, x_atten_mask, y_atten_mask] = batch
