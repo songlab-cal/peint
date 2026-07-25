@@ -67,6 +67,14 @@ def _config_from_kwargs(
         max_encoder_seq_len=kwargs.get('max_encoder_seq_len', 1024),
         max_decoder_seq_len=kwargs.get('max_decoder_seq_len', 1024),
         weight_decay=kwargs.get('weight_decay', 0.0),
+        # Ablation axes (default to published behavior when absent from kwargs,
+        # e.g. loading an older checkpoint whose hparams predate these fields).
+        mlm_weight=kwargs.get('mlm_weight', 1.0),
+        use_time_conditioning=kwargs.get('use_time_conditioning', True),
+        encoder_backbone=kwargs.get('encoder_backbone', 'ESM2-150M'),
+        esm_finetune_mode=kwargs.get('esm_finetune_mode', 'frozen'),
+        lora_rank=kwargs.get('lora_rank', None),
+        architecture=kwargs.get('architecture', 'encoder_decoder'),
     )
 
 
@@ -118,12 +126,15 @@ class _PeintTransformerBase(nn.Module, ABC):
         self.max_len = self.config.max_seq_len
         self.dropout_p = self.config.dropout_p
         self.use_bias = self.config.use_attention_bias
+        self.use_time_conditioning = self.config.use_time_conditioning
 
-        # ESM model setup (frozen)
+        # Pretrained backbone. Frozen by default (published PEINT); the "lora"/"full"
+        # fine-tuning modes keep it trainable and are wired up in the LoRA ablation.
         self.esm = esm_model
         self.vocab = esm_vocab
         self.esm.eval()
-        self.esm.requires_grad_(False)
+        if self.config.esm_finetune_mode == "frozen":
+            self.esm.requires_grad_(False)
 
         # Loss functions
         self.y_criterion = nn.CrossEntropyLoss(
@@ -194,6 +205,10 @@ class _PeintTransformerBase(nn.Module, ABC):
             Decoder hidden states [B, L, D] with time added
         """
         h_y = self.embedding(y)
+        if not self.use_time_conditioning:
+            # Ablate evolutionary-time conditioning: decoder input is the token
+            # embedding alone, with no additive time signal.
+            return h_y
         ht = self.time_embedding(t)
         ht = ht.expand_as(h_y)
         return h_y + ht
