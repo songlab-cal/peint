@@ -49,14 +49,25 @@ class PeintDataset(Dataset):
         # filter out sequences longer than max_len
         data = list(filter(lambda x: len(x[0]) <= max_len and len(x[1]) <= max_len, data))
 
-        # ESM's vocab has all ambiguous aa codes other than J, so we replace it here
-        self.x = [torch.tensor(vocab.encode(d[0].replace("J", "I"))) for d in data]
-        self.y = [torch.tensor(vocab.encode(d[1].replace("J", "I"))) for d in data]
+        # ESM's vocab has all ambiguous aa codes other than J, so we replace it here.
+        # Tokens are stored as int16 (vocab has ~33 tokens, far below 2**15) instead of
+        # the default int64: an 8x-smaller token store that keeps the exact indices. They
+        # are cast back to long in the collator, so the batch fed to the model is
+        # unchanged. Without this, holding the whole tokenized dataset in memory needs
+        # ~100 GB/rank (and each DDP rank loads all of it), which OOMs shared nodes.
+        self.x = [
+            torch.tensor(vocab.encode(d[0].replace("J", "I")), dtype=torch.int16) for d in data
+        ]
+        self.y = [
+            torch.tensor(vocab.encode(d[1].replace("J", "I")), dtype=torch.int16) for d in data
+        ]
 
-        times = [float(d[2]) for d in data]
         self.lengths = [len(d[0]) for d in data]
 
-        self.t = [max(t, MIN_TIME_THRESHOLD) * torch.ones(self.lengths[i]) for i, t in enumerate(times)]
+        # Time is constant across a sequence, and the collator only ever uses one value
+        # per transition, so store a single scalar (clamped to MIN_TIME_THRESHOLD) rather
+        # than a per-residue float32 vector. Expanded back to per-residue in the model.
+        self.t = [max(float(d[2]), MIN_TIME_THRESHOLD) for d in data]
 
     def __len__(self):
         return len(self.x)
@@ -87,16 +98,21 @@ class PeintCollator:
         x_inputs = [F.pad(x, (1, 0), value=self.vocab.cls_idx) for x in x_inputs]
         x_targets = [F.pad(x, (1, 0), value=self.vocab.cls_idx) for x in x_targets]
 
-        x_inputs = nn.utils.rnn.pad_sequence(x_inputs, batch_first=True, padding_value=self.vocab.padding_idx)
-        x_targets = nn.utils.rnn.pad_sequence(x_targets, batch_first=True, padding_value=self.vocab.padding_idx)
+        # Cast tokens back to long after padding (int16 storage -> int64 for the
+        # embedding / cross-entropy); the resulting indices are identical to the
+        # original int64 pipeline.
+        x_inputs = nn.utils.rnn.pad_sequence(x_inputs, batch_first=True, padding_value=self.vocab.padding_idx).long()
+        x_targets = nn.utils.rnn.pad_sequence(x_targets, batch_first=True, padding_value=self.vocab.padding_idx).long()
 
         # Add EOS/BOS to y sequences
         ys = [F.pad(y, (0, 1), value=self.vocab.eos_idx) for y in ys]
         y_inputs = [F.pad(y[:-1], (1, 0), value=self.vocab.cls_idx) for y in ys]
-        y_inputs = nn.utils.rnn.pad_sequence(y_inputs, batch_first=True, padding_value=self.vocab.padding_idx)
-        y_targets = nn.utils.rnn.pad_sequence(ys, batch_first=True, padding_value=self.vocab.padding_idx)
+        y_inputs = nn.utils.rnn.pad_sequence(y_inputs, batch_first=True, padding_value=self.vocab.padding_idx).long()
+        y_targets = nn.utils.rnn.pad_sequence(ys, batch_first=True, padding_value=self.vocab.padding_idx).long()
 
-        ts = torch.stack([torch.tensor([b[0] for b in ts])], dim=-1)
+        # ts are scalar per-transition times (b[2] is now a float, not a per-residue
+        # vector); stack to shape (B, 1), matching the original collator output.
+        ts = torch.stack([torch.tensor(ts, dtype=torch.float32)], dim=-1)
 
         x_pad_mask = x_inputs == self.vocab.padding_idx
         y_pad_mask = y_inputs == self.vocab.padding_idx
