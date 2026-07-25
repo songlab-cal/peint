@@ -19,6 +19,14 @@ ESM2_REGISTRY = {
     "ESM2-150M": (esm.pretrained.esm2_t30_150M_UR50D, 640),
 }
 
+# ESM-C backbones (EvolutionaryScale `esm3` package). name -> (from_pretrained id,
+# embed_dim). Only the 300M model (hidden size 960) is currently supported.
+ESMC_REGISTRY = {
+    "esmc":      ("esmc_300m", 960),
+    "ESM-C":     ("esmc_300m", 960),
+    "esmc_300m": ("esmc_300m", 960),
+}
+
 
 def get_esm_model(name):
     """Return ``(loader, embed_dim)`` for a registered ESM2 backbone name."""
@@ -28,6 +36,20 @@ def get_esm_model(name):
         )
     loader, embed_dim = ESM2_REGISTRY[name]
     return loader, embed_dim
+
+
+def _build_esmc_backbone(name):
+    """Build an ESM-C backbone + its vocab. Requires the optional `esm3` package."""
+    try:
+        from esm.models.esmc import ESMC  # esm3 package exposes this as esm.models
+    except ImportError:
+        from esm3.models.esmc import ESMC  # older layout
+    from protevo.datasets._vocab import get_esmc_vocab
+
+    version, embed_dim = ESMC_REGISTRY[name]
+    # ESM-C uses flash-attention internally; no wrapping needed.
+    module = ESMC.from_pretrained(version)
+    return module, get_esmc_vocab(), embed_dim
 
 
 def build_esm_backbone(name: str = "ESM2-150M", use_flash: bool = True):
@@ -45,6 +67,10 @@ def build_esm_backbone(name: str = "ESM2-150M", use_flash: bool = True):
         Tuple ``(backbone_module, vocab, embed_dim)``. The module holds pretrained
         weights; PEINT freezes it (unless a fine-tuning mode is requested).
     """
+    # ESM-C backbones use a different loader (esm3 package) and vocab.
+    if name in ESMC_REGISTRY:
+        return _build_esmc_backbone(name)
+
     # Lazy import to avoid any import-time coupling with the transformer modules.
     from protevo.models._transformer_modules import FLASH_AVAILABLE
 

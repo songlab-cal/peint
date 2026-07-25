@@ -78,6 +78,17 @@ def _config_from_kwargs(
     )
 
 
+def _is_esmc_backbone(module) -> bool:
+    """True if ``module`` is an ESM-C model (esm3 package).
+
+    Detected by class identity rather than ``isinstance`` so we never import the
+    optional esm3 package just to check an ESM2 backbone (keeps ESM2 the default
+    and ESM2-only environments/tests fast).
+    """
+    cls = type(module)
+    return cls.__name__ == "ESMC" and cls.__module__.split(".")[0] in ("esm", "esm3")
+
+
 ###################################
 # Abstract Base Class             #
 ###################################
@@ -147,9 +158,21 @@ class _PeintTransformerBase(nn.Module, ABC):
             ignore_index=self.vocab.padding_idx
         )
 
-        # Token embeddings (initialized from ESM, frozen)
-        self.embedding = nn.Embedding(len(self.vocab), embed_dim)
-        self.embedding.load_state_dict(self.esm.embed_tokens.state_dict())
+        # Which backbone family are we wrapping? (ESM2 vs ESM-C have different
+        # embedding / LM-head / representation APIs.)
+        self._is_esmc = _is_esmc_backbone(self.esm)
+
+        # Token embeddings (initialized from the backbone, frozen). ESM2 exposes
+        # `embed_tokens`; ESM-C exposes `embed`.
+        if self._is_esmc:
+            assert embed_dim == 960, (
+                "ESM-C support currently requires embed_dim=960 (esmc_300m)."
+            )
+            self.embedding = nn.Embedding(self.esm.embed.weight.shape[0], embed_dim)
+            self.embedding.load_state_dict(self.esm.embed.state_dict())
+        else:
+            self.embedding = nn.Embedding(len(self.vocab), embed_dim)
+            self.embedding.load_state_dict(self.esm.embed_tokens.state_dict())
         self.embedding.requires_grad_(False)
 
         # Time embedding
@@ -159,13 +182,27 @@ class _PeintTransformerBase(nn.Module, ABC):
         self.enc_layers = self._create_encoder_layers()
         self.dec_layers = self._create_decoder_layers()
 
-        # Language model head (initialized from ESM, frozen)
-        self.lm_head = RobertaLMHead(
-            embed_dim=self.embed_dim,
-            output_dim=len(self.vocab),
-            weight=self.embedding.weight
-        )
-        self.lm_head.load_state_dict(self.esm.lm_head.state_dict())
+        # Language model head (initialized from the backbone, frozen). ESM2 uses a
+        # RobertaLMHead tied to the token embedding; ESM-C uses its `sequence_head`
+        # (a RegressionHead). NOTE: ESM-C's sequence_head is 64-wide (reserved slots
+        # beyond the 33 real tokens in the vocab), so we match that width — the real
+        # token ids (0..len(vocab)-1) are a subset of those 64 outputs.
+        if self._is_esmc:
+            try:
+                from esm.layers.regression_head import RegressionHead
+            except ImportError:
+                from esm3.layers.regression_head import RegressionHead
+            # esmc_300m's sequence_head is 64-wide (guarded by embed_dim==960 above).
+            ESMC_300M_SEQUENCE_HEAD_DIM = 64
+            self.lm_head = RegressionHead(self.embed_dim, ESMC_300M_SEQUENCE_HEAD_DIM)
+            self.lm_head.load_state_dict(self.esm.sequence_head.state_dict())
+        else:
+            self.lm_head = RobertaLMHead(
+                embed_dim=self.embed_dim,
+                output_dim=len(self.vocab),
+                weight=self.embedding.weight
+            )
+            self.lm_head.load_state_dict(self.esm.lm_head.state_dict())
         self.lm_head.requires_grad_(False)
 
     @abstractmethod
@@ -179,14 +216,18 @@ class _PeintTransformerBase(nn.Module, ABC):
         pass
 
     def _compute_language_model_representations(self, x: torch.Tensor) -> torch.Tensor:
-        """Compute ESM2 representations for source sequence.
+        """Compute backbone representations for the source sequence.
 
         Args:
             x: Source tokens [B, L] with CLS and EOS from dataloader
 
         Returns:
-            Final hidden state from ESM [B, L, D]
+            Final hidden state from the backbone [B, L, D]
         """
+        if self._is_esmc:
+            # ESM-C takes token ids directly and returns an object with `.embeddings`
+            # (the final hidden state); it handles padding internally.
+            return self.esm(x).embeddings
         res = self.esm(
             x,
             repr_layers=[self.esm.num_layers],
