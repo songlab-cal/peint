@@ -1,0 +1,44 @@
+# A2 ablation: swap the frozen backbone to ESM2-35M.
+# Identical to baseline.yaml EXCEPT the backbone + its matching embed_dim.
+# (embed_dim must equal the backbone hidden size; num_heads=20 divides 480.)
+# Run: python train_peint_model.py --config configs/ablations/esm2_35m.yaml
+
+# --- data ---
+data_path: /scratch/users/spa-evolution-yss/protevo/data/tr_rosetta/15k_gapless_scale_1024l
+families_file: /scratch/users/spa-evolution-yss/protevo/data/tr_rosetta/14k5_fam.json
+output_dir: /scratch/users/yufan.cao/protevo_ablations/esm2_35m
+n_families: -1
+wandb_project: peint-ablations
+
+# --- optimization ---
+batch_size: 32
+lr: 3.0e-4
+weight_decay: 0.01
+grad_clip: 1.0
+accumulate_grad_batches: 6
+max_steps: 300000
+num_warmup_steps: 2000
+
+# --- architecture:  >>> backbone swap is the ONLY change from baseline <<< ---
+esm_model: ESM2-35M        # <-- 35M backbone (vs ESM2-150M)
+embed_dim: 480             # <-- must match the ESM2-35M hidden size
+num_heads: 20
+num_encoder_layers: 5
+num_decoder_layers: 5
+max_seq_len: 1022
+dropout_p: 0.0
+use_attention_bias: true
+
+# --- ablation axes (published defaults) ---
+mlm_weight: 1.0
+no_time_conditioning: false
+esm_finetune_mode: frozen
+architecture: encoder_decoder
+mask_prob: 0.15
+
+# --- runtime / bookkeeping ---
+seed: 0
+accelerator: gpu
+devices: [0, 1, 2, 3]
+checkpoint_every: 4000
+name_addon: esm2_35m
