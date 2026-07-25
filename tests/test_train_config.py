@@ -9,6 +9,7 @@ import os
 
 import pytest
 
+from protevo.models._config import PeintConfig
 from train_peint_model import build_parser, parse_args_with_config
 
 PEINT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -16,6 +17,26 @@ PEINT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def _config(name):
     return os.path.join(PEINT_ROOT, "configs", "ablations", name)
+
+
+def test_baseline_is_the_published_default_config():
+    """A0: baseline.yaml is the UNMODIFIED default config — every ablation axis
+    matches PeintConfig's own default, so ablations differ from it in one axis only.
+    """
+    args = parse_args_with_config(["--config", _config("baseline.yaml")])
+    defaults = PeintConfig.__dataclass_fields__
+    # ablation axes at their published defaults
+    assert args.mlm_weight == defaults["mlm_weight"].default == 1.0
+    assert args.no_time_conditioning is False  # -> use_time_conditioning True (default)
+    assert args.esm_finetune_mode == defaults["esm_finetune_mode"].default == "frozen"
+    assert args.lora_rank == defaults["lora_rank"].default is None
+    assert args.architecture == defaults["architecture"].default == "encoder_decoder"
+    assert args.esm_model == defaults["encoder_backbone"].default == "ESM2-150M"
+    # published architecture scalars
+    assert (args.num_encoder_layers, args.num_decoder_layers) == (5, 5)
+    assert args.embed_dim == 640 and args.num_heads == 20
+    assert args.dropout_p == 0.0 and args.use_attention_bias is True
+    assert args.mask_prob == 0.15
 
 
 def test_no_config_uses_published_defaults():
