@@ -137,6 +137,56 @@ print(nlls)
 
 See `vep.ipynb` for an end-to-end example on deep mutational scanning data.
 
+### Per-Site Likelihood vs. Classical Models
+
+PEINT reads unaligned sequences, so its per-residue log-likelihoods are indexed by
+residue, while LG and WAG score alignment columns. `protevo.evaluation` bridges the
+two: it runs PEINT on the unaligned transitions, drops the residues that are
+insertions relative to the query (using the a3m alignment mask), and places what
+remains in its alignment column. Gap columns are scored 0, so summing over sites
+ignores them; use `dataset.scored_columns_mask()` to average over the rest.
+
+```python
+from protevo.evaluation import (
+    AlignedTransitionsDataset,
+    evaluate_transitions_log_likelihood_per_site,
+)
+from protevo.models import load_peint_model
+import torch
+
+device = torch.device('cuda')
+model, vocab = load_peint_model('model_checkpoints/peint.ckpt', device=device, model_type='standard')
+
+dataset = AlignedTransitionsDataset(
+    transitions_dir='.../unaligned/test_transitions_dir',
+    aligned_transitions_dir='.../aligned/test_transitions_dir',
+    alignment_mask_dir='.../unaligned/test_alignment_mask_dir',
+    family='4djg_1_B',
+    vocab=vocab,
+)
+# [num_transitions, alignment_width]; 0 in gap columns, NaN where nothing was scored.
+per_site = evaluate_transitions_log_likelihood_per_site(model, vocab, dataset, device)
+mean_ll = per_site[dataset.scored_columns_mask()].mean()
+```
+
+The same computation over many families, cached and written in the same layout as
+the LG/WAG evaluators:
+
+```bash
+python -m protevo.evaluation \
+    --transitions-dir   local_data/unaligned/test_transitions_dir/output_transitions_dir \
+    --aligned-transitions-dir local_data/aligned/test_transitions_dir \
+    --alignment-mask-dir local_data/unaligned/test_alignment_mask_dir \
+    --checkpoint model_checkpoints/peint.ckpt \
+    --output-dir likelihoods --num-families 5 --device cuda
+```
+
+`figure2_ll_eval.py` runs the full comparison against the uniform random guess, WAG
+and LG baselines and produces the likelihood-vs-time figures.
+
+Note: the Flash Attention path scores in bfloat16, which costs roughly 0.1 nats on
+an individual site. Pass `use_flash=False` for fp32 when per-site values matter.
+
 ### Homology Detection
 
 There are many options for homology detection, we provide a set of tools to do various types of homology detection.

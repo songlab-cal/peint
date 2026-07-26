@@ -3,6 +3,14 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Local Data
+local_data/
+
+# Computation caches and generated figures
+_cache_peint/
+_cache_cherryml/
+figure*.pdf
+
 # Distribution / packaging
 build/
 dist/

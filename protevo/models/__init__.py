@@ -12,9 +12,13 @@ Training components (require Lightning/wandb, import from protevo.models.trainin
     - GradNormCallback: Logs gradient norms during training
 """
 
+from ._equ import equ_model__cached, equ_rate_matrix
 from ._lg import (
     evaluate_lg_model_transitions_log_likelihood__cached,
     train_lg_model__cached,
+)
+from ._uniform_random_guess import (
+    evaluate_uniform_random_guess_model_transitions_log_likelihood__cached,
 )
 from ._wag import (
     evaluate_wag_model_transitions_log_likelihood__cached,
@@ -36,7 +40,10 @@ __all__ = [
     # Configuration
     "PeintConfig",
     # Classical models
+    "equ_model__cached",
+    "equ_rate_matrix",
     "evaluate_lg_model_transitions_log_likelihood__cached",
+    "evaluate_uniform_random_guess_model_transitions_log_likelihood__cached",
     "train_lg_model__cached",
     "evaluate_wag_model_transitions_log_likelihood__cached",
     "train_wag_model__cached",
