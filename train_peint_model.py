@@ -16,6 +16,19 @@ from protevo.models.training import (
 from protevo.datasets.training import PeintDataModule
 
 
+def latest_checkpoint(output_dir):
+    """Return the most-recently-modified ``*.ckpt`` under ``output_dir``, else None.
+
+    Used for preemption-safe auto-resume: it searches recursively so a run started
+    on a different day (different run-name subdir) is still found.
+    """
+    import glob
+    if not output_dir:
+        return None
+    ckpts = glob.glob(os.path.join(output_dir, "**", "*.ckpt"), recursive=True)
+    return max(ckpts, key=os.path.getmtime) if ckpts else None
+
+
 def main(args):
 
     if args.seed is not None:
@@ -36,6 +49,15 @@ def main(args):
         print(f"WARNING: --embed_dim ({args.embed_dim}) does not match "
               f"{args.esm_model} embed_dim ({esm_embed_dim}). Overriding to {esm_embed_dim}.")
         args.embed_dim = esm_embed_dim
+
+    # Auto-resume: on requeue after preemption, continue from the latest checkpoint
+    # under output_dir rather than restarting from scratch. Lightning restores model,
+    # optimizer, LR-scheduler and global_step, so training is unaffected (at most
+    # `checkpoint_every` steps are re-done). Safe on borrowed/preemptible partitions.
+    if args.resume_path is None:
+        args.resume_path = latest_checkpoint(args.output_dir)
+        if args.resume_path:
+            print(f"Auto-resume: resuming from latest checkpoint {args.resume_path}")
 
     if args.resume_path:
         run_name = args.resume_path.split('/')[-2]

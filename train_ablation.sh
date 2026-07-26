@@ -6,8 +6,17 @@
 #SBATCH --gres=gpu:A100:2
 #SBATCH --cpus-per-task=8
 #SBATCH --time=14-00:00:00
+#SBATCH --requeue
+#SBATCH --open-mode=append
 #SBATCH --output=/scratch/users/yufan.cao/protevo_ablations/logs/%x-%j.out
 #SBATCH --error=/scratch/users/yufan.cao/protevo_ablations/logs/%x-%j.err
+#
+# Preemption-safe: --requeue re-runs this script on preemption; train_peint_model.py
+# then auto-resumes from the latest checkpoint under --output_dir (Lightning restores
+# model/optimizer/scheduler/global_step). At most `checkpoint_every` steps are re-done.
+# Override partition/gres at submit for borrowed nodes, e.g.:
+#   sbatch --partition=songmei --gres=gpu:H200:2 --job-name=peint_no_mlm \
+#          train_ablation.sh configs/ablations/no_mlm.yaml
 #
 # Full-scale ablation training launcher (referee #3.3).
 #

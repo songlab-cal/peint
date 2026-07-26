@@ -10,7 +10,7 @@ import os
 import pytest
 
 from protevo.models._config import PeintConfig
-from train_peint_model import build_parser, parse_args_with_config
+from train_peint_model import build_parser, latest_checkpoint, parse_args_with_config
 
 PEINT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -84,6 +84,23 @@ def test_shipped_no_mlm_config_differs_only_in_mlm_weight():
     base_d = {k: v for k, v in vars(base).items() if k not in ignore}
     nomlm_d = {k: v for k, v in vars(nomlm).items() if k not in ignore}
     assert base_d == nomlm_d
+
+
+def test_latest_checkpoint_for_preemption_resume(tmp_path):
+    """Auto-resume picks the newest checkpoint (recursively), for requeue safety."""
+    assert latest_checkpoint(None) is None
+    assert latest_checkpoint(str(tmp_path)) is None  # nothing yet
+
+    # Simulate two run subdirs (e.g. resumed on a later day) with checkpoints.
+    import os
+    import time
+    old = tmp_path / "run_a" / "step-4000.ckpt"
+    new = tmp_path / "run_b" / "step-8000.ckpt"
+    for p in (old, new):
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x")
+    os.utime(old, (time.time() - 100, time.time() - 100))  # make `old` older
+    assert latest_checkpoint(str(tmp_path)) == str(new)
 
 
 def test_build_parser_has_ablation_flags():
