@@ -37,6 +37,7 @@ dependencies = [
 train = [
     "lightning>=2.5",
     "wandb",
+    "peft>=0.10",  # LoRA fine-tuning (esm_finetune_mode="lora"); optional at runtime
 ]
 dev = [
     "pytest>=7.0.0",

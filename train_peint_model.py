@@ -83,6 +83,7 @@ def main(args):
         "num_encoder_layers": args.num_encoder_layers,
         "num_decoder_layers": args.num_decoder_layers,
         "lr": args.lr,
+        "lora_lr": args.lora_lr,
         "num_warmup_steps": args.num_warmup_steps,
         "num_training_steps": args.max_steps,
         "weight_decay": args.weight_decay,
@@ -200,6 +201,8 @@ def build_parser():
                         help='LoRA rank; required when --esm_finetune_mode lora')
     parser.add_argument('--lora_alpha', type=int, default=None,
                         help='LoRA scaling numerator; defaults to lora_rank')
+    parser.add_argument('--lora_lr', type=float, default=None,
+                        help='Separate LR for LoRA adapters; defaults to --lr (single LR)')
     parser.add_argument('--architecture', type=str, default='encoder_decoder',
                         choices=['encoder_decoder', 'decoder_only'],
                         help='Model architecture (decoder_only is deferred)')

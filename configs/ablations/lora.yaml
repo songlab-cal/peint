@@ -34,7 +34,8 @@ use_attention_bias: true
 mlm_weight: 1.0
 esm_finetune_mode: lora       # <-- inject LoRA adapters (base ESM2 stays frozen)
 lora_rank: 16
-lora_alpha: 16
+lora_alpha: 32                # scaling = alpha/rank = 2
+# lora_lr: 1.0e-4             # optional: separate LR for adapters; default = --lr (single LR)
 architecture: encoder_decoder
 mask_prob: 0.15
 

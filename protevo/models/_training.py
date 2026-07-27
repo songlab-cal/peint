@@ -5,12 +5,12 @@ This module contains the Lightning wrapper for training PEINT models.
 Requires: lightning
 """
 
+import lightning as pl
 import torch
 import torch.nn.functional as F
-import lightning as pl
 
-from protevo.models._transformer import PeintTransformer
 from protevo.models._optimization import get_polynomial_decay_schedule_with_warmup
+from protevo.models._transformer import PeintTransformer
 
 
 class PeintLightningModule(pl.LightningModule):
@@ -26,6 +26,7 @@ class PeintLightningModule(pl.LightningModule):
         num_decoder_layers: int,
         embed_dim: int,
         lr: float = 1e-4,
+        lora_lr: float = None,
         num_warmup_steps: int = 10000,
         num_training_steps: int = 100000,
         **kwargs,
@@ -44,6 +45,9 @@ class PeintLightningModule(pl.LightningModule):
         )
 
         self.lr = lr
+        # Optional separate LR for LoRA adapters (A5). None -> adapters use the main
+        # LR, i.e. a single effective learning rate (unchanged default behavior).
+        self.lora_lr = lora_lr
         self.wd = kwargs.get("weight_decay", 0.0)
         self.num_warmup_steps = num_warmup_steps
         self.num_training_steps = num_training_steps
@@ -167,14 +171,25 @@ class PeintLightningModule(pl.LightningModule):
         return metrics, ppl_per_bin
 
     def configure_optimizers(self):
-        param_dict = {pn: p for pn, p in self.named_parameters()}
-        param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
-        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
-        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
-        optim_groups = [
-            {"params": decay_params, "weight_decay": self.wd},
-            {"params": nodecay_params, "weight_decay": 0.0},
+        param_dict = {pn: p for pn, p in self.named_parameters() if p.requires_grad}
+
+        # Split trainable params into LoRA adapters vs the rest so the adapters can
+        # (optionally) use their own LR. When lora_lr is None both buckets use the
+        # main LR, giving a single effective learning rate — for a run with no LoRA
+        # params (the default frozen model) this reduces to the original two groups.
+        lora_lr = self.lora_lr if self.lora_lr is not None else self.lr
+        buckets = [
+            (self.lr, {n: p for n, p in param_dict.items() if "lora_" not in n}),
+            (lora_lr, {n: p for n, p in param_dict.items() if "lora_" in n}),
         ]
+        optim_groups = []
+        for group_lr, params in buckets:
+            decay = [p for p in params.values() if p.dim() >= 2]
+            nodecay = [p for p in params.values() if p.dim() < 2]
+            if decay:
+                optim_groups.append({"params": decay, "weight_decay": self.wd, "lr": group_lr})
+            if nodecay:
+                optim_groups.append({"params": nodecay, "weight_decay": 0.0, "lr": group_lr})
 
         optimizer = torch.optim.AdamW(optim_groups, lr=self.lr)
 

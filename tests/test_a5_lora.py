@@ -35,8 +35,8 @@ def test_lora_config_differs_from_baseline_only_in_finetune_axes():
         ["--config", os.path.join(PEINT_ROOT, "configs/ablations/lora.yaml")]
     )
     assert base.esm_finetune_mode == "frozen" and lora.esm_finetune_mode == "lora"
-    assert lora.lora_rank == 16 and lora.lora_alpha == 16
-    ignore = {"esm_finetune_mode", "lora_rank", "lora_alpha", "name_addon",
+    assert lora.lora_rank == 16 and lora.lora_alpha == 32
+    ignore = {"esm_finetune_mode", "lora_rank", "lora_alpha", "lora_lr", "name_addon",
               "output_dir", "config"}
     a = {k: v for k, v in vars(lora).items() if k not in ignore}
     b = {k: v for k, v in vars(base).items() if k not in ignore}
@@ -96,14 +96,15 @@ def test_lora_is_identity_at_init():
     lora, _ = _build(esm_finetune_mode="lora", lora_rank=8)
     x, y, t, xm, ym = _inputs(vocab)
 
-    # copy the non-LoRA (PEINT enc/dec/head) weights so only the adapter differs
+    # copy the non-LoRA (PEINT enc/dec/head) weights so only the adapter differs.
+    # peft renames the wrapped linear's weight q_proj.weight -> q_proj.base_layer.weight.
     lora_sd = lora.state_dict()
     for k, v in frozen.state_dict().items():
-        # frozen key q_proj.weight maps to lora key q_proj.base.weight in the backbone
         if k in lora_sd:
             lora_sd[k].copy_(v)
         else:
-            kb = k.replace(".q_proj.", ".q_proj.base.").replace(".v_proj.", ".v_proj.base.")
+            kb = (k.replace(".q_proj.", ".q_proj.base_layer.")
+                   .replace(".v_proj.", ".v_proj.base_layer."))
             if kb in lora_sd:
                 lora_sd[kb].copy_(v)
     lora.load_state_dict(lora_sd)
@@ -115,14 +116,51 @@ def test_lora_is_identity_at_init():
 
 
 @pytest.mark.slow
+def test_lora_lr_sets_a_separate_optimizer_group():
+    """The lora_lr knob puts LoRA adapters in their own optimizer group at that LR,
+    while the PEINT layers stay at the main LR; without it there's a single LR.
+
+    Reads each group's `initial_lr` (the scheduler scales the live `lr` to ~0 during
+    warmup at step 0).
+    """
+    from protevo.models.training import PeintLightningModule
+    model, _ = _build(esm_finetune_mode="lora", lora_rank=8)
+    lora_ids = {id(p) for n, p in model.named_parameters() if "lora_" in n}
+    assert lora_ids
+
+    lm = PeintLightningModule.__new__(PeintLightningModule)
+    torch.nn.Module.__init__(lm)
+    lm.model = model
+    lm.lr, lm.wd = 3e-4, 0.01
+    lm.num_warmup_steps, lm.num_training_steps = 10, 100
+
+    # Case 1: separate lora_lr -> adapters at lora_lr, PEINT layers at lr.
+    lm.lora_lr = 1e-4
+    (opt,), _ = lm.configure_optimizers()
+    assert {round(g["initial_lr"], 8) for g in opt.param_groups} == {3e-4, 1e-4}
+    lora_group_lrs = {
+        round(g["initial_lr"], 8)
+        for g in opt.param_groups
+        if any(id(p) in lora_ids for p in g["params"])
+    }
+    assert lora_group_lrs == {1e-4}
+
+    # Case 2: lora_lr None -> single effective LR (all groups at lr).
+    lm.lora_lr = None
+    (opt2,), _ = lm.configure_optimizers()
+    assert {round(g["initial_lr"], 8) for g in opt2.param_groups} == {3e-4}
+
+
+@pytest.mark.slow
 def test_lora_checkpoint_roundtrips():
     ref, vocab = _build(esm_finetune_mode="lora", lora_rank=8, lora_alpha=16)
     dim = ref.embed_dim
     x, y, t, xm, ym = _inputs(vocab)
-    # perturb an adapter so it's not the zero-init trivial case
+    # perturb an adapter so it's not the zero-init trivial case (peft names the
+    # trainable adapter tensors ...lora_B.default.weight)
     with torch.no_grad():
         for n, p in ref.named_parameters():
-            if n.endswith("lora_B"):
+            if "lora_B" in n:
                 p.add_(0.01)
         _, ref_y, *_ = ref(x, y, t, xm, ym)
 
