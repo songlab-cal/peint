@@ -70,7 +70,6 @@ def _config_from_kwargs(
         # Ablation axes (default to published behavior when absent from kwargs,
         # e.g. loading an older checkpoint whose hparams predate these fields).
         mlm_weight=kwargs.get('mlm_weight', 1.0),
-        use_time_conditioning=kwargs.get('use_time_conditioning', True),
         encoder_backbone=kwargs.get('encoder_backbone', 'ESM2-150M'),
         esm_finetune_mode=kwargs.get('esm_finetune_mode', 'frozen'),
         lora_rank=kwargs.get('lora_rank', None),
@@ -137,7 +136,6 @@ class _PeintTransformerBase(nn.Module, ABC):
         self.max_len = self.config.max_seq_len
         self.dropout_p = self.config.dropout_p
         self.use_bias = self.config.use_attention_bias
-        self.use_time_conditioning = self.config.use_time_conditioning
 
         # Pretrained backbone. Frozen by default (published PEINT); the "lora"/"full"
         # fine-tuning modes keep it trainable and are wired up in the LoRA ablation.
@@ -188,11 +186,16 @@ class _PeintTransformerBase(nn.Module, ABC):
         # beyond the 33 real tokens in the vocab), so we match that width — the real
         # token ids (0..len(vocab)-1) are a subset of those 64 outputs.
         if self._is_esmc:
+            # RegressionHead is the upstream ESM-C head factory from the esm3 package
+            # (esm3.layers.regression_head: Linear->GELU->LayerNorm->Linear), not code
+            # we wrote. Rebuilding it here and loading esm.sequence_head's weights
+            # mirrors the ESM-C integration in the research repo (protein-evolution
+            # protevo/models/_transformer.py). esmc_300m's sequence_head is 64-wide
+            # (guarded by embed_dim==960 above).
             try:
                 from esm.layers.regression_head import RegressionHead
             except ImportError:
                 from esm3.layers.regression_head import RegressionHead
-            # esmc_300m's sequence_head is 64-wide (guarded by embed_dim==960 above).
             ESMC_300M_SEQUENCE_HEAD_DIM = 64
             self.lm_head = RegressionHead(self.embed_dim, ESMC_300M_SEQUENCE_HEAD_DIM)
             self.lm_head.load_state_dict(self.esm.sequence_head.state_dict())
@@ -246,10 +249,6 @@ class _PeintTransformerBase(nn.Module, ABC):
             Decoder hidden states [B, L, D] with time added
         """
         h_y = self.embedding(y)
-        if not self.use_time_conditioning:
-            # Ablate evolutionary-time conditioning: decoder input is the token
-            # embedding alone, with no additive time signal.
-            return h_y
         ht = self.time_embedding(t)
         ht = ht.expand_as(h_y)
         return h_y + ht

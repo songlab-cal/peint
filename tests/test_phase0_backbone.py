@@ -85,24 +85,6 @@ def test_zero_encoder_forward_differs_from_full(backbone):
 
 
 @pytest.mark.slow
-def test_time_conditioning_gate_changes_output(backbone):
-    """use_time_conditioning=False drops the time term, changing decoder logits."""
-    _, vocab, _ = backbone
-    x, y_in, t, xm, ym = _inputs(vocab)
-
-    torch.manual_seed(0)
-    with_time = _build(backbone, 5, 5, use_time_conditioning=True)
-    state = with_time.state_dict()
-    without_time = _build(backbone, 5, 5, use_time_conditioning=False)
-    without_time.load_state_dict(state)  # identical weights, only the gate differs
-
-    with torch.no_grad():
-        _, y_on, *_ = with_time(x, y_in, t, xm, ym)
-        _, y_off, *_ = without_time(x, y_in, t, xm, ym)
-    assert not torch.allclose(y_on, y_off)
-
-
-@pytest.mark.slow
 def test_checkpoint_roundtrip_reproduces_logits(backbone):
     """hyper_parameters (incl. ablation fields) round-trip; logits reproduce exactly."""
     _, vocab, embed_dim = backbone
@@ -110,7 +92,7 @@ def test_checkpoint_roundtrip_reproduces_logits(backbone):
 
     ref = _build(
         backbone, 5, 5,
-        encoder_backbone=BACKBONE, mlm_weight=0.0, use_time_conditioning=False,
+        encoder_backbone=BACKBONE, mlm_weight=0.0,
         use_attention_bias=True,
     )
     with torch.no_grad():
@@ -119,7 +101,7 @@ def test_checkpoint_roundtrip_reproduces_logits(backbone):
     hp = dict(
         max_seq_len=1022, num_heads=20, num_encoder_layers=5, num_decoder_layers=5,
         embed_dim=embed_dim, use_attention_bias=True, dropout_p=0.0,
-        encoder_backbone=BACKBONE, mlm_weight=0.0, use_time_conditioning=False,
+        encoder_backbone=BACKBONE, mlm_weight=0.0,
         esm_finetune_mode="frozen", lora_rank=None, architecture="encoder_decoder",
     )
     prefixed = {f"model.{k}": v for k, v in ref.state_dict().items()}
@@ -135,8 +117,6 @@ def test_checkpoint_roundtrip_reproduces_logits(backbone):
     assert model.config.encoder_backbone == BACKBONE
     assert model.embed_dim == EMBED_DIM
     assert model.config.mlm_weight == 0.0
-    assert model.config.use_time_conditioning is False
-
     with torch.no_grad():
         _, rt_y, *_ = model(x, y_in, t, xm, ym)
     assert torch.allclose(ref_y, rt_y, atol=1e-5)

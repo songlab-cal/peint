@@ -72,10 +72,22 @@ def build_esm_backbone(name: str = "ESM2-150M", use_flash: bool = True):
         return _build_esmc_backbone(name)
 
     # Lazy import to avoid any import-time coupling with the transformer modules.
+    from esm.data import Alphabet
+
     from protevo.models._transformer_modules import FLASH_AVAILABLE
 
     loader, embed_dim = get_esm_model(name)
-    esm_pretrained, vocab = loader()
+    esm_pretrained, loader_vocab = loader()
+
+    # All ESM2 UR50D sizes share the ESM-1b alphabet. We (a) build the wrapper module
+    # with alphabet="ESM-1b" and (b) return that same ESM-1b vocab, so every size uses
+    # one consistent vocabulary and the token indices line up with the pretrained
+    # embed_tokens / lm_head weights loaded below. Guard that the loader agrees, so a
+    # future backbone with a different alphabet fails loudly instead of misaligning.
+    vocab = Alphabet.from_architecture("ESM-1b")
+    assert loader_vocab.to_dict() == vocab.to_dict(), (
+        f"{name} alphabet differs from ESM-1b; token indices would misalign."
+    )
 
     if use_flash and FLASH_AVAILABLE:
         from protevo.models._flash_esm import ESM2Flash

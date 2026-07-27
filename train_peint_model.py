@@ -1,19 +1,19 @@
-import os
-import json
-from argparse import ArgumentParser
 import datetime
+import json
+import os
+from argparse import ArgumentParser
 
-import numpy as np
 import lightning as pl
+import numpy as np
 from lightning.pytorch.callbacks import LearningRateMonitor
 
-from protevo.models import ESM2_REGISTRY, get_esm_model, build_esm_backbone
+from protevo.datasets.training import PeintDataModule
+from protevo.models import ESM2_REGISTRY, build_esm_backbone, get_esm_model
 from protevo.models.training import (
+    GradNormCallback,
     PeintLightningModule,
     ValidationLikelihoodCallback,
-    GradNormCallback,
 )
-from protevo.datasets.training import PeintDataModule
 
 
 def latest_checkpoint(output_dir):
@@ -92,7 +92,6 @@ def main(args):
         # rebuilds on the right backbone and remembers which axis was ablated).
         "encoder_backbone": args.esm_model,
         "mlm_weight": args.mlm_weight,
-        "use_time_conditioning": not args.no_time_conditioning,
         "esm_finetune_mode": args.esm_finetune_mode,
         "lora_rank": args.lora_rank,
         "architecture": args.architecture,
@@ -193,8 +192,6 @@ def build_parser():
     # --- Ablation axes (referee #3.3); defaults reproduce published PEINT ---
     parser.add_argument('--mlm_weight', type=float, default=1.0,
                         help='Weight on the auxiliary MLM loss (0.0 ablates it)')
-    parser.add_argument('--no_time_conditioning', action='store_true',
-                        help='Ablate evolutionary-time conditioning (drop the time embedding)')
     parser.add_argument('--esm_finetune_mode', type=str, default='frozen',
                         choices=['frozen', 'lora', 'full'],
                         help='How to train the backbone (default: frozen)')

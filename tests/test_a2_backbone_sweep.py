@@ -28,15 +28,30 @@ def _config(name):
 @pytest.mark.slow
 @pytest.mark.parametrize("name,dim", SIZES)
 def test_backbone_size_builds_and_runs(name, dim):
+    from esm.data import Alphabet
     assert dim % NUM_HEADS == 0, f"num_heads={NUM_HEADS} must divide embed_dim={dim}"
     esm_model, vocab, embed_dim = build_esm_backbone(name, use_flash=False)
     assert embed_dim == dim
+
+    # C2: every ESM2 size uses the SAME (ESM-1b) vocabulary.
+    assert vocab.to_dict() == Alphabet.from_architecture("ESM-1b").to_dict()
 
     model = PeintTransformerVanilla(
         esm_model=esm_model, esm_vocab=vocab, embed_dim=embed_dim,
         num_heads=NUM_HEADS, num_encoder_layers=5, num_decoder_layers=5,
         encoder_backbone=name,
     ).eval()
+
+    # C2: the PEINT token embedding and LM head must be the backbone's pretrained
+    # weights (loaded, not randomly initialized), and shaped to the ESM-1b vocab.
+    assert model.embedding.weight.shape == (len(vocab), embed_dim)
+    assert torch.equal(model.embedding.weight.detach(),
+                       esm_model.embed_tokens.weight.detach())
+    lm_ref = esm_model.lm_head.state_dict()
+    lm_got = model.lm_head.state_dict()
+    assert lm_got.keys() == lm_ref.keys()
+    for k in lm_ref:
+        assert torch.equal(lm_got[k], lm_ref[k]), f"lm_head[{k}] not loaded from backbone"
 
     x = torch.tensor([vocab.cls_idx] + vocab.encode("ACDEFGHIK") + [vocab.eos_idx]).unsqueeze(0)
     y_in = torch.tensor([vocab.cls_idx] + vocab.encode("ACDEYGHIK")).unsqueeze(0)

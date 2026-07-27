@@ -4,7 +4,7 @@ This module provides typed configuration to replace scattered kwargs.get() calls
 ensuring typos are caught at instantiation time rather than silently using defaults.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 
@@ -37,8 +37,6 @@ class PeintConfig:
         mlm_weight: Weight on the auxiliary masked-language-modeling loss (the
             encoder-side ``x_logits`` term). 1.0 = published; 0.0 = ablate MLM,
             train on the autoregressive decoder loss only.
-        use_time_conditioning: If False, drop the additive time embedding from the
-            decoder input (ablate evolutionary-time conditioning). Default True.
         encoder_backbone: Name of the frozen pretrained backbone to use (registry
             key, e.g. "ESM2-8M"/"ESM2-35M"/"ESM2-150M"/"esmc"). Default "ESM2-150M".
         esm_finetune_mode: How the backbone is trained: "frozen" (published),
@@ -61,7 +59,6 @@ class PeintConfig:
     weight_decay: float = 0.0
     # --- Ablation axes (default = published PEINT behavior) ---
     mlm_weight: float = 1.0
-    use_time_conditioning: bool = True
     encoder_backbone: str = "ESM2-150M"
     esm_finetune_mode: str = "frozen"
     lora_rank: Optional[int] = None
@@ -130,7 +127,6 @@ class PeintConfig:
             "max_decoder_seq_len": self.max_decoder_seq_len,
             "weight_decay": self.weight_decay,
             "mlm_weight": self.mlm_weight,
-            "use_time_conditioning": self.use_time_conditioning,
             "encoder_backbone": self.encoder_backbone,
             "esm_finetune_mode": self.esm_finetune_mode,
             "lora_rank": self.lora_rank,

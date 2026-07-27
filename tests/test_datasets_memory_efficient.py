@@ -122,6 +122,27 @@ def test_storage_is_compact():
     assert _t.equal(x0.long(), _t.tensor(VOCAB.encode(ROWS[0][0].replace("J", "I"))))
 
 
+def test_vectorized_tokenization_matches_vocab_encode_every_char():
+    """C4: the LUT-based tokenizer equals vocab.encode(...) for every possible
+    residue char (all A-Z + gap chars), including the J->I fold. This is the exact
+    per-residue guarantee that makes the fast loader byte-identical to the slow one.
+    """
+    import string
+    import tempfile
+
+    chars = string.ascii_uppercase + "-."           # every char the LUT populates
+    seq = chars + "J"                                 # include J (must fold to I)
+    # x must be <= max_len and pair with a y; reuse seq for both.
+    with tempfile.TemporaryDirectory() as d:
+        _write(os.path.join(d, "fam.txt"), [(seq, seq, "0.1")])
+        ds = PeintDataset(d, vocab=VOCAB, families=["fam"], max_len=1024)
+    x0, _, _, _ = ds[0]
+    expected = VOCAB.encode(seq.replace("J", "I"))
+    assert torch.equal(x0.long(), torch.tensor(expected))
+    # explicit J->I check
+    assert x0.long()[-1].item() == VOCAB.encode("I")[0]
+
+
 def test_returned_tokens_are_long_for_the_model():
     """Collator output tokens are int64 (embedding / cross-entropy require long)."""
     import tempfile

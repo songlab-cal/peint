@@ -16,7 +16,6 @@ def test_defaults_match_published_behavior():
     """New ablation fields default to the published PEINT configuration."""
     cfg = PeintConfig(**BASE)
     assert cfg.mlm_weight == 1.0
-    assert cfg.use_time_conditioning is True
     assert cfg.encoder_backbone == "ESM2-150M"
     assert cfg.esm_finetune_mode == "frozen"
     assert cfg.lora_rank is None
@@ -28,7 +27,6 @@ def test_roundtrip_to_from_dict():
     cfg = PeintConfig(
         **BASE,
         mlm_weight=0.0,
-        use_time_conditioning=False,
         encoder_backbone="ESM2-35M",
         esm_finetune_mode="lora",
         lora_rank=8,

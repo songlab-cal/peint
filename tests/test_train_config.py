@@ -27,7 +27,6 @@ def test_baseline_is_the_published_default_config():
     defaults = PeintConfig.__dataclass_fields__
     # ablation axes at their published defaults
     assert args.mlm_weight == defaults["mlm_weight"].default == 1.0
-    assert args.no_time_conditioning is False  # -> use_time_conditioning True (default)
     assert args.esm_finetune_mode == defaults["esm_finetune_mode"].default == "frozen"
     assert args.lora_rank == defaults["lora_rank"].default is None
     assert args.architecture == defaults["architecture"].default == "encoder_decoder"
@@ -105,6 +104,6 @@ def test_latest_checkpoint_for_preemption_resume(tmp_path):
 
 def test_build_parser_has_ablation_flags():
     dests = {a.dest for a in build_parser()._actions}
-    for flag in ("mlm_weight", "no_time_conditioning", "esm_finetune_mode",
+    for flag in ("mlm_weight", "esm_finetune_mode",
                  "lora_rank", "architecture", "mask_prob", "config"):
         assert flag in dests
