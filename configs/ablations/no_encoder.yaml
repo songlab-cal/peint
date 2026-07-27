@@ -1,0 +1,44 @@
+# A4 ablation: remove the extra encoder layers (num_encoder_layers=0).
+# Identical to baseline.yaml EXCEPT num_encoder_layers: 0 — the frozen ESM2 backbone
+# output feeds the decoder directly (every decoder layer cross-attends to it), with no
+# additional trainable encoder blocks. Run:
+#   python train_peint_model.py --config configs/ablations/no_encoder.yaml
+
+# --- data ---
+data_path: /scratch/users/spa-evolution-yss/protevo/data/tr_rosetta/15k_gapless_scale_1024l
+families_file: /scratch/users/spa-evolution-yss/protevo/data/tr_rosetta/14k5_fam.json
+output_dir: /scratch/users/yufan.cao/protevo_ablations/no_encoder
+n_families: -1
+wandb_project: peint-ablations
+
+# --- optimization ---
+batch_size: 32
+lr: 3.0e-4
+weight_decay: 0.01
+grad_clip: 1.0
+accumulate_grad_batches: 12   # 2 GPUs -> keep 768-seq effective batch (32*12*2 = published 32*6*4)
+max_steps: 300000
+num_warmup_steps: 2000
+
+# --- architecture:  >>> num_encoder_layers=0 is the ONLY change from baseline <<< ---
+esm_model: ESM2-150M
+embed_dim: 640
+num_heads: 20
+num_encoder_layers: 0         # <-- ablate the extra encoder; ESM2 output -> decoder directly
+num_decoder_layers: 5
+max_seq_len: 1022
+dropout_p: 0.0
+use_attention_bias: true
+
+# --- ablation axes (published defaults) ---
+mlm_weight: 1.0
+esm_finetune_mode: frozen
+architecture: encoder_decoder
+mask_prob: 0.15
+
+# --- runtime / bookkeeping ---
+seed: 0
+accelerator: gpu
+devices: [0, 1]
+checkpoint_every: 4000
+name_addon: no_encoder
