@@ -48,5 +48,12 @@ cd /scratch/users/yufan.cao/peint-dev/rebuttal/peint
 echo "Host: $(hostname)   Config: ${CONFIG}   Extra args: $*"
 nvidia-smi --query-gpu=index,name,memory.total --format=csv || true
 
+# NCCL robustness: some yss/borrowed nodes (e.g. luthien, feanor) hang on the
+# GPU-to-GPU P2P transport, causing multi-GPU DDP to time out on the first
+# all-reduce. Disabling P2P/IB forces a robust shared-memory/host transport. This
+# is correctness-neutral (all-reduce results are identical) at a small speed cost.
+export NCCL_P2P_DISABLE=1
+export NCCL_IB_DISABLE=1
+
 # One task per GPU (DDP); Lightning picks up the SLURM allocation.
 srun python train_peint_model.py --config "${CONFIG}" "$@"
