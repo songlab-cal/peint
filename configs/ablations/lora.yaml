@@ -1,0 +1,46 @@
+# A5 ablation: LoRA fine-tuning of the ESM2 backbone.
+# Identical to baseline.yaml EXCEPT the backbone is no longer fully frozen: low-rank
+# adapters (rank 16) are injected into the ESM2 attention q/v projections and trained
+# alongside the PEINT layers; the base ESM2 weights stay frozen. Run:
+#   python train_peint_model.py --config configs/ablations/lora.yaml
+
+# --- data ---
+data_path: /scratch/users/spa-evolution-yss/protevo/data/tr_rosetta/15k_gapless_scale_1024l
+families_file: /scratch/users/spa-evolution-yss/protevo/data/tr_rosetta/14k5_fam.json
+output_dir: /scratch/users/yufan.cao/protevo_ablations/lora
+n_families: -1
+wandb_project: peint-ablations
+
+# --- optimization ---
+batch_size: 32
+lr: 3.0e-4
+weight_decay: 0.01
+grad_clip: 1.0
+accumulate_grad_batches: 12   # 2 GPUs -> keep 768-seq effective batch (32*12*2 = published 32*6*4)
+max_steps: 300000
+num_warmup_steps: 2000
+
+# --- architecture (published PEINT) ---
+esm_model: ESM2-150M
+embed_dim: 640
+num_heads: 20
+num_encoder_layers: 5
+num_decoder_layers: 5
+max_seq_len: 1022
+dropout_p: 0.0
+use_attention_bias: true
+
+# --- ablation axes:  >>> LoRA fine-tuning is the change from baseline <<< ---
+mlm_weight: 1.0
+esm_finetune_mode: lora       # <-- inject LoRA adapters (base ESM2 stays frozen)
+lora_rank: 16
+lora_alpha: 16
+architecture: encoder_decoder
+mask_prob: 0.15
+
+# --- runtime / bookkeeping ---
+seed: 0
+accelerator: gpu
+devices: [0, 1]
+checkpoint_every: 4000
+name_addon: lora

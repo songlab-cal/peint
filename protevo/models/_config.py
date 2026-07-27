@@ -62,6 +62,7 @@ class PeintConfig:
     encoder_backbone: str = "ESM2-150M"
     esm_finetune_mode: str = "frozen"
     lora_rank: Optional[int] = None
+    lora_alpha: Optional[int] = None  # LoRA scaling numerator; None -> defaults to lora_rank
     architecture: str = "encoder_decoder"
 
     def __post_init__(self):
@@ -130,5 +131,6 @@ class PeintConfig:
             "encoder_backbone": self.encoder_backbone,
             "esm_finetune_mode": self.esm_finetune_mode,
             "lora_rank": self.lora_rank,
+            "lora_alpha": self.lora_alpha,
             "architecture": self.architecture,
         }

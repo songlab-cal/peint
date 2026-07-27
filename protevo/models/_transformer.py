@@ -73,6 +73,7 @@ def _config_from_kwargs(
         encoder_backbone=kwargs.get('encoder_backbone', 'ESM2-150M'),
         esm_finetune_mode=kwargs.get('esm_finetune_mode', 'frozen'),
         lora_rank=kwargs.get('lora_rank', None),
+        lora_alpha=kwargs.get('lora_alpha', None),
         architecture=kwargs.get('architecture', 'encoder_decoder'),
     )
 
@@ -137,13 +138,26 @@ class _PeintTransformerBase(nn.Module, ABC):
         self.dropout_p = self.config.dropout_p
         self.use_bias = self.config.use_attention_bias
 
-        # Pretrained backbone. Frozen by default (published PEINT); the "lora"/"full"
-        # fine-tuning modes keep it trainable and are wired up in the LoRA ablation.
+        # Pretrained backbone. Behaviour by esm_finetune_mode:
+        #   "frozen" (default, published): backbone fully frozen — bit-identical to
+        #            the released model; NO import of the LoRA module.
+        #   "lora":   base frozen, trainable low-rank adapters injected (A5 ablation);
+        #            the adapters start as zero so the model matches "frozen" at init.
+        #   "full":   backbone left fully trainable.
         self.esm = esm_model
         self.vocab = esm_vocab
         self.esm.eval()
-        if self.config.esm_finetune_mode == "frozen":
+        mode = self.config.esm_finetune_mode
+        if mode in ("frozen", "lora"):
             self.esm.requires_grad_(False)
+        if mode == "lora":
+            # Imported lazily so the default path has no LoRA dependency.
+            from protevo.models._lora import apply_lora_to_backbone
+            apply_lora_to_backbone(
+                self.esm,
+                rank=self.config.lora_rank,
+                alpha=self.config.lora_alpha,
+            )
 
         # Loss functions
         self.y_criterion = nn.CrossEntropyLoss(

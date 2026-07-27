@@ -94,6 +94,7 @@ def main(args):
         "mlm_weight": args.mlm_weight,
         "esm_finetune_mode": args.esm_finetune_mode,
         "lora_rank": args.lora_rank,
+        "lora_alpha": args.lora_alpha,
         "architecture": args.architecture,
     }
 
@@ -197,6 +198,8 @@ def build_parser():
                         help='How to train the backbone (default: frozen)')
     parser.add_argument('--lora_rank', type=int, default=None,
                         help='LoRA rank; required when --esm_finetune_mode lora')
+    parser.add_argument('--lora_alpha', type=int, default=None,
+                        help='LoRA scaling numerator; defaults to lora_rank')
     parser.add_argument('--architecture', type=str, default='encoder_decoder',
                         choices=['encoder_decoder', 'decoder_only'],
                         help='Model architecture (decoder_only is deferred)')
