@@ -164,9 +164,15 @@ class PeintCollator:
         y_inputs = nn.utils.rnn.pad_sequence(y_inputs, batch_first=True, padding_value=self.vocab.padding_idx).long()
         y_targets = nn.utils.rnn.pad_sequence(ys, batch_first=True, padding_value=self.vocab.padding_idx).long()
 
-        # ts are scalar per-transition times (b[2] is now a float, not a per-residue
-        # vector); stack to shape (B, 1), matching the original collator output.
-        ts = torch.stack([torch.tensor(ts, dtype=torch.float32)], dim=-1)
+        # One time value per transition -> shape (B, 1). Robust to both the compact
+        # scalar-time store (PeintDataset) and the legacy per-residue time vector
+        # (max(t, MIN)*ones(len)) still produced by some datasets (e.g. the evaluation
+        # AlignedTransitions dataset): the collator only ever uses a single time per
+        # transition, so take element 0 of a tensor time or the scalar directly.
+        ts = torch.tensor(
+            [float(v.flatten()[0]) if torch.is_tensor(v) else float(v) for v in ts],
+            dtype=torch.float32,
+        ).unsqueeze(-1)
 
         x_pad_mask = x_inputs == self.vocab.padding_idx
         y_pad_mask = y_inputs == self.vocab.padding_idx
