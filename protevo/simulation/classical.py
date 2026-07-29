@@ -4,12 +4,12 @@ from Bio import SeqIO
 import numpy as np
 import pandas as pd
 import cherryml
-from protevo.io import read_rate_matrix, read_site_rates, read_tree
+from ete3 import Tree
+from protevo.io import read_rate_matrix, read_site_rates
 from protevo import utils
 from protevo.utils import get_process_args, matrix_exponential_reversible, read_msa, write_msa
 from protevo import caching as protevo_caching
 from protevo.caching import secure_parallel_output
-from protevo.datasets import run_mafft
 import logging
 import multiprocessing 
 import tqdm
@@ -81,8 +81,8 @@ def _simulate_evolution_on_tree(
     output_msa_dir: Optional[str] = None
 ):
     # Reroot tree
-    tree = read_tree(os.path.join(tree_dir, family + ".txt"))
-    root_id = tree.root()
+    ete_tree = Tree(os.path.join(tree_dir, family + ".txt"), format=1)
+    root_id = ete_tree.name
     if root_seqs_dir: 
         root_seq_path = os.path.join(root_seqs_dir, family + ".txt")
         with open(root_seq_path, 'r') as f:
@@ -93,7 +93,6 @@ def _simulate_evolution_on_tree(
         msa=read_msa(os.path.join(msa_dir, family + ".txt"))
         root_seq=msa[root_id]
     
-    ete_tree = tree.to_ete3()
     ete_tree.set_outgroup(root_id)
 
     site_rates = read_site_rates(os.path.join(site_rates_dir, family + ".txt")) if site_rates_dir else [1.0] * len(root_seq)

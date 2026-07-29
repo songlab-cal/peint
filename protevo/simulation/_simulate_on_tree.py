@@ -21,10 +21,6 @@ from protevo.caching import secure_parallel_output
 from protevo.utils import get_process_args, write_msa, read_msa
 from protevo.models._loading import load_model
 
-from protevo.io import (
-    read_tree
-)
-
 def _seed_all(seed):
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -59,7 +55,7 @@ def load_msa_and_tree(
     tree_file = os.path.join(tree_dir, family_name)
 
     msa = {r.id: str(r.seq) for r in SeqIO.parse(msa_file, "fasta")}
-    tree = read_tree(tree_file)
+    tree = Tree(tree_file, format=1)
 
     return tree, msa
 
@@ -431,7 +427,7 @@ def simulate_families_with_rejection_sampling_batched(
         if root_sequences_dir:
             tree_path = os.path.join(tree_dir, family_name + ".txt")
             root_seq_path = os.path.join(root_sequences_dir, family_name + ".txt")
-            tree = read_tree(tree_path)
+            tree = Tree(tree_path, format=1)
 
             initial_label, initial_seq = next(iter(read_msa(root_seq_path).items()))
         # Use default median length sequence from MSA
@@ -444,7 +440,7 @@ def simulate_families_with_rejection_sampling_batched(
 
             initial_label, initial_seq = sorted_seqs[median_idx]
 
-        tree_ete = tree.to_ete3()
+        tree_ete = tree
         reroot_node = tree_ete&initial_label
         tree_ete.set_outgroup(reroot_node)
         new_root = tree_ete.get_tree_root()

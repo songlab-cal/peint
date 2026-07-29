@@ -48,6 +48,9 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["protevo*"]
 
+[tool.setuptools.package-data]
+"protevo.simulation" = ["assets/*.nex"]
+
 [tool.black]
 line-length = 100
 target-version = ["py39", "py310", "py311"]
