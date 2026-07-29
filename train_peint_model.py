@@ -125,8 +125,11 @@ def main(args):
 
     output_path = os.path.join(args.output_dir, run_name)
 
-    if not os.path.exists(output_path):
-        os.makedirs(output_path, exist_ok=False)
+    # exist_ok=True is required for DDP: every rank runs this, and the previous
+    # check-then-makedirs raced (rank 0 creates the dir, rank 1 crashes on
+    # FileExistsError, then rank 0 hangs waiting for the dead rank). It also makes
+    # requeue/resume safe when the run dir already exists.
+    os.makedirs(output_path, exist_ok=True)
 
     lr_monitor = LearningRateMonitor(logging_interval='step')
 
