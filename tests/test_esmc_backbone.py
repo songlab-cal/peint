@@ -88,14 +88,20 @@ def test_esmc_embedding_and_lm_head_load_from_backbone(esmc_backbone):
         encoder_backbone="esmc",
     ).eval()
     assert model._is_esmc
-    # embedding tied to ESM-C's embed table
-    assert torch.equal(model.embedding.weight.detach(), module.embed.weight.detach())
+    # The PEINT embedding/lm_head are loaded FROM the ESM-C backbone's pretrained
+    # weights, but held in float32 modules (the backbone is bf16 for its flash attn;
+    # the PEINT side is float32 with bf16 supplied by autocast at train/eval time).
+    # So compare VALUES, not dtype — the bf16 weights are exactly representable in
+    # float32, so an exact equality holds once dtypes are matched.
+    # embedding initialized from ESM-C's embed table (compare on cpu: the backbone may
+    # sit on cuda while this un-.cuda()'d model's copies are on cpu).
+    assert torch.equal(model.embedding.weight.detach().float().cpu(), module.embed.weight.detach().float().cpu())
     # lm_head is ESM-C's sequence_head (64-wide)
     ref = module.sequence_head.state_dict()
     got = model.lm_head.state_dict()
     assert got.keys() == ref.keys()
     for k in ref:
-        assert torch.equal(got[k], ref[k]), f"lm_head param {k} not loaded from sequence_head"
+        assert torch.equal(got[k].float().cpu(), ref[k].float().cpu()), f"lm_head param {k} not loaded from sequence_head"
 
 
 @pytest.mark.slow
@@ -133,7 +139,11 @@ def test_esmc_end_to_end_forward(esmc_backbone):
     t = torch.tensor([[0.1]], dtype=torch.float32).cuda()
     xm = x.eq(vocab.padding_idx)
     ym = y_in.eq(vocab.padding_idx)
-    with torch.no_grad():
+    # PeintTransformer is the flash variant; flash attention requires bf16, so it runs
+    # under bf16 autocast (exactly as training with precision='bf16' and the flash eval
+    # do). A plain float32 forward is not a supported mode for a flash model — the golden
+    # ESM2 reference test uses the Vanilla (non-flash) variant for its float32 forward.
+    with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
         x_logits, y_logits = model(x, y_in, t, xm, ym)
     assert x_logits.shape[-1] == 64 and y_logits.shape[-1] == 64
     assert torch.isfinite(x_logits).all() and torch.isfinite(y_logits).all()

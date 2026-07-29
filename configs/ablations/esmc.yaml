@@ -1,0 +1,47 @@
+# A3 ablation: ESM-C backbone.
+# Identical to baseline.yaml EXCEPT the frozen encoder is ESM-C (esmc_300m) instead of
+# ESM2-150M. Backbone-only swap: same 5+5 layers, additive time conditioning, RoPE, MLM
+# weight 1.0 — only the pretrained protein LM changes. Following the size-sweep convention
+# (A2), the decoder width follows the backbone: embed_dim 960 (esmc_300m hidden size) vs
+# 640 for ESM2-150M. ESM-C loads in bf16 (its flash-attn is bf16-only) and is frozen; the
+# PEINT layers are float32 with bf16 supplied by precision='bf16' autocast (as for ESM2).
+#   python train_peint_model.py --config configs/ablations/esmc.yaml
+
+# --- data ---
+data_path: /scratch/users/spa-evolution-yss/protevo/data/tr_rosetta/15k_gapless_scale_1024l
+families_file: /scratch/users/spa-evolution-yss/protevo/data/tr_rosetta/14k5_fam.json
+output_dir: /scratch/users/yufan.cao/protevo_ablations/esmc
+n_families: -1
+wandb_project: peint-ablations
+
+# --- optimization ---
+batch_size: 32
+lr: 3.0e-4
+weight_decay: 0.01
+grad_clip: 1.0
+accumulate_grad_batches: 12   # 2 GPUs -> keep 768-seq effective batch (32*12*2 = published 32*6*4)
+max_steps: 300000
+num_warmup_steps: 2000
+
+# --- architecture (published PEINT, ESM-C backbone) ---
+esm_model: esmc            # <-- ESM-C backbone (vs ESM2-150M); saved as encoder_backbone
+embed_dim: 960             # <-- esmc_300m hidden size (backbone-following, like A2)
+num_heads: 20
+num_encoder_layers: 5
+num_decoder_layers: 5
+max_seq_len: 1022
+dropout_p: 0.0
+use_attention_bias: true
+
+# --- ablation axes (defaults = published behavior) ---
+mlm_weight: 1.0
+esm_finetune_mode: frozen
+architecture: encoder_decoder
+mask_prob: 0.15
+
+# --- runtime / bookkeeping ---
+seed: 0
+accelerator: gpu
+devices: [0, 1]
+checkpoint_every: 4000
+name_addon: esmc

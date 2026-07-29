@@ -8,7 +8,12 @@ import numpy as np
 from lightning.pytorch.callbacks import LearningRateMonitor
 
 from protevo.datasets.training import PeintDataModule
-from protevo.models import ESM2_REGISTRY, build_esm_backbone, get_esm_model
+from protevo.models import (
+    ESM2_REGISTRY,
+    ESMC_REGISTRY,
+    build_esm_backbone,
+    get_backbone_embed_dim,
+)
 from protevo.models.training import (
     GradNormCallback,
     PeintLightningModule,
@@ -44,7 +49,7 @@ def main(args):
         np.random.shuffle(families)
         families = families[:args.n_families]
 
-    _, esm_embed_dim = get_esm_model(args.esm_model)
+    esm_embed_dim = get_backbone_embed_dim(args.esm_model)
     if args.embed_dim != esm_embed_dim:
         print(f"WARNING: --embed_dim ({args.embed_dim}) does not match "
               f"{args.esm_model} embed_dim ({esm_embed_dim}). Overriding to {esm_embed_dim}.")
@@ -131,7 +136,13 @@ def main(args):
         every_n_train_steps=args.checkpoint_every,
     )
 
-    strategy = 'ddp'
+    # Use DDP only for genuinely multi-GPU runs. A single-device run gets 'auto'
+    # (single_device) so it never initializes an NCCL process group — this avoids
+    # the multi-GPU LoRA/NCCL watchdog hangs seen on some nodes, and is exactly
+    # equivalent optimization when the effective batch is preserved via
+    # accumulate_grad_batches. Multi-GPU configs (devices=[0,1]) keep 'ddp'.
+    _n_gpus = len(args.devices) if args.devices else 1
+    strategy = 'ddp' if _n_gpus > 1 else 'auto'
 
     trainer = pl.Trainer(
         strategy=strategy,
@@ -187,9 +198,9 @@ def build_parser():
     parser.add_argument('--wandb_entity', type=str, nargs="?", default=None, help='Wandb entity name')
     parser.add_argument('--wandb_project', type=str, nargs="?", default=None, help='Wandb project name')
     parser.add_argument('--esm_model', type=str, default='ESM2-150M',
-                        choices=list(ESM2_REGISTRY.keys()),
-                        help='Base ESM2 backbone (determines and overrides embed_dim); '
-                             'saved as encoder_backbone in the checkpoint')
+                        choices=list(ESM2_REGISTRY.keys()) + list(ESMC_REGISTRY.keys()),
+                        help='Base backbone (ESM2 size or ESM-C; determines and overrides '
+                             'embed_dim); saved as encoder_backbone in the checkpoint')
 
     # --- Ablation axes (referee #3.3); defaults reproduce published PEINT ---
     parser.add_argument('--mlm_weight', type=float, default=1.0,

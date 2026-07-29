@@ -38,6 +38,23 @@ def get_esm_model(name):
     return loader, embed_dim
 
 
+def get_backbone_embed_dim(name):
+    """Return the hidden/embed dim for any registered backbone (ESM2 or ESM-C).
+
+    Backbone-agnostic (unlike :func:`get_esm_model`, which only knows the ESM2
+    loaders): the ESM-C entries carry a ``from_pretrained`` id, not a callable, so
+    the training launcher uses this to resolve ``embed_dim`` before building.
+    """
+    if name in ESM2_REGISTRY:
+        return ESM2_REGISTRY[name][1]
+    if name in ESMC_REGISTRY:
+        return ESMC_REGISTRY[name][1]
+    raise ValueError(
+        f"Unknown backbone '{name}'. Available: "
+        f"{list(ESM2_REGISTRY) + list(ESMC_REGISTRY)}"
+    )
+
+
 def _build_esmc_backbone(name):
     """Build an ESM-C backbone + its vocab. Requires the optional `esm3` package."""
     try:
@@ -47,7 +64,10 @@ def _build_esmc_backbone(name):
     from protevo.datasets._vocab import get_esmc_vocab
 
     version, embed_dim = ESMC_REGISTRY[name]
-    # ESM-C uses flash-attention internally; no wrapping needed.
+    # ESM-C uses flash-attention internally, which only supports fp16/bf16, so the
+    # backbone MUST stay bf16 (unlike the float32 ESM2 backbones). It is frozen, so it
+    # needs no float32 master weights. The dtype boundary to the float32 PEINT layers
+    # is handled where the backbone's outputs are consumed (see _transformer.py).
     module = ESMC.from_pretrained(version)
     return module, get_esmc_vocab(), embed_dim
 
