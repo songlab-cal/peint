@@ -1,0 +1,50 @@
+# A5 variant: LoRA with a SEPARATE, lower adapter learning rate.
+# Identical to lora.yaml EXCEPT lora_lr=1e-4: the LoRA adapters train at 1e-4 while the
+# originally-trainable params (PEINT encoder/decoder + heads) keep lr=3e-4 (consistent with
+# lora.yaml and all other runs). Motivation: at lr=3e-4 the adapters transiently perturb the
+# strong frozen ESM2 backbone and the run dips slightly below the frozen baseline early
+# (gap −0.010→−0.004 over 4k→12k); a gentler adapter LR should reduce that early degradation.
+# This is a STANDALONE hedge run -- the lora.yaml (adapter-lr 3e-4) run keeps going untouched.
+#   python train_peint_model.py --config configs/ablations/lora_lr1e-4.yaml
+
+# --- data ---
+data_path: /scratch/users/spa-evolution-yss/protevo/data/tr_rosetta/15k_gapless_scale_1024l
+families_file: /scratch/users/spa-evolution-yss/protevo/data/tr_rosetta/14k5_fam.json
+output_dir: /scratch/users/yufan.cao/protevo_ablations/lora_lr1e-4
+n_families: -1
+wandb_project: peint-ablations
+
+# --- optimization ---
+batch_size: 16
+lr: 3.0e-4                     # main LR for the ORIGINALLY-trainable params (decoder + heads)
+weight_decay: 0.01
+grad_clip: 1.0
+accumulate_grad_batches: 24   # batch16 * accum24 * 2 GPUs = 768 (matches the lora 3e-4 run exactly)
+max_steps: 300000
+num_warmup_steps: 2000
+
+# --- architecture (published PEINT) ---
+esm_model: ESM2-150M
+embed_dim: 640
+num_heads: 20
+num_encoder_layers: 5
+num_decoder_layers: 5
+max_seq_len: 1022
+dropout_p: 0.0
+use_attention_bias: true
+
+# --- ablation axes:  >>> LoRA with lower ADAPTER LR (the only change vs lora.yaml) <<< ---
+mlm_weight: 1.0
+esm_finetune_mode: lora
+lora_rank: 16
+lora_alpha: 32                # scaling = alpha/rank = 2
+lora_lr: 1.0e-4               # <-- adapters at 1e-4; the rest stay at lr=3e-4
+architecture: encoder_decoder
+mask_prob: 0.15
+
+# --- runtime / bookkeeping ---
+seed: 0
+accelerator: gpu
+devices: [0, 1]
+checkpoint_every: 4000
+name_addon: lora_lr1e-4

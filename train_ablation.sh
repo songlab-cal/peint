@@ -55,5 +55,12 @@ nvidia-smi --query-gpu=index,name,memory.total --format=csv || true
 export NCCL_P2P_DISABLE=1
 export NCCL_IB_DISABLE=1
 
+# Load pretrained backbones from SCRATCH, not HOME/node-local disk. fair-esm downloads
+# the ESM2 weights via torch.hub (default ~/.cache/torch or node /tmp); on borrowed nodes
+# that local disk can be full -> ENOSPC. A scratch cache is shared, has space, and is
+# pre-populated so runs never re-download. HF_HOME does the same for ESM-C (esm3).
+export TORCH_HOME=/scratch/users/yufan.cao/torch_cache
+export HF_HOME=/scratch/users/yufan.cao/hf-cache
+
 # One task per GPU (DDP); Lightning picks up the SLURM allocation.
 srun python train_peint_model.py --config "${CONFIG}" "$@"
