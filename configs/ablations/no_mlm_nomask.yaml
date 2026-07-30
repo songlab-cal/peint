@@ -1,0 +1,50 @@
+# A1b ablation: remove the MLM component ENTIRELY (masking + loss).
+# Companion to no_mlm.yaml, which keeps mask_prob=0.15 and only zeroes the MLM loss
+# (isolating the loss term with the input pipeline fixed). This config additionally sets
+# mask_prob=0, so the encoder sees CLEAN (unmasked) source sequences and the decoder trains
+# a pure autoregressive objective on uncorrupted inputs.
+#   - baseline (mask + MLM loss)  vs  no_mlm (mask, no loss)  -> isolates the MLM loss
+#   - no_mlm (mask, no loss)      vs  no_mlm_nomask (no mask) -> isolates the masking
+#   - baseline                    vs  no_mlm_nomask          -> isolates the whole MLM component
+# The MLM head (x_logits) is still computed but unused (mlm_weight=0 gates its loss); with
+# mask_prob=0 the masked-token targets are empty, so this is correctness-neutral (minor waste).
+#   python train_peint_model.py --config configs/ablations/no_mlm_nomask.yaml
+
+# --- data ---
+data_path: /scratch/users/spa-evolution-yss/protevo/data/tr_rosetta/15k_gapless_scale_1024l
+families_file: /scratch/users/spa-evolution-yss/protevo/data/tr_rosetta/14k5_fam.json
+output_dir: /scratch/users/yufan.cao/protevo_ablations/no_mlm_nomask
+n_families: -1
+wandb_project: peint-ablations
+
+# --- optimization ---
+batch_size: 32
+lr: 3.0e-4
+weight_decay: 0.01
+grad_clip: 1.0
+accumulate_grad_batches: 12   # 2 GPUs -> keep 768-seq effective batch (32*12*2 = published 32*6*4)
+max_steps: 300000
+num_warmup_steps: 2000
+
+# --- architecture (published PEINT) ---
+esm_model: ESM2-150M
+embed_dim: 640
+num_heads: 20
+num_encoder_layers: 5
+num_decoder_layers: 5
+max_seq_len: 1022
+dropout_p: 0.0
+use_attention_bias: true
+
+# --- ablation axes:  >>> remove MLM loss AND masking <<< ---
+mlm_weight: 0.0            # no MLM loss (as in no_mlm)
+mask_prob: 0.0            # <-- clean inputs (this is the change vs no_mlm.yaml)
+esm_finetune_mode: frozen
+architecture: encoder_decoder
+
+# --- runtime / bookkeeping ---
+seed: 0
+accelerator: gpu
+devices: [0, 1]
+checkpoint_every: 4000
+name_addon: no_mlm_nomask
