@@ -35,15 +35,28 @@ import argparse
 import glob
 import json
 import os
+import pathlib
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def _load_reports(results_dir: str):
-    """Read every ``*.json`` report ``run_workload.py --mode bench`` produced."""
+def _load_reports(results_dir: str, exclude: str = ""):
+    """Read every ``*.json`` report ``run_workload.py --mode bench`` produced.
+
+    ``exclude`` is this script's own output prefix: its report also has a "rows"
+    key, so re-running over a directory it already wrote would fold the summary
+    back in as if it were fresh measurements.
+    """
     reports = []
+    exclude = os.path.abspath(exclude) if exclude else ""
     for path in sorted(glob.glob(os.path.join(results_dir, "**", "*.json"), recursive=True)):
+        if exclude and os.path.abspath(path) == exclude:
+            continue
+        # Convention: anything under a "superseded/" directory measured a tree
+        # state that no longer exists and must not appear in the table.
+        if "superseded" in pathlib.PurePath(path).parts:
+            continue
         try:
             with open(path) as fh:
                 payload = json.load(fh)
@@ -52,6 +65,8 @@ def _load_reports(results_dir: str):
         if not isinstance(payload, dict) or "rows" not in payload:
             continue  # parity verdicts and dump files, not bench reports
         for row in payload["rows"]:
+            if "mean_ms" not in row:
+                continue  # not a timing row
             row = dict(row)
             row["_meta"] = payload.get("metadata", {})
             row["_source"] = os.path.relpath(path, results_dir)
@@ -66,6 +81,18 @@ def _tree_label(meta) -> str:
     if repo.endswith("peint"):
         return "baseline"
     return os.path.basename(repo) or "?"
+
+
+def _problem_size(row):
+    """Size of the work item, so unlike-sized runs are never compared.
+
+    Homology at N=120 and N=200 are different problems; without this they land in
+    the same speedup group and produce a meaningless ratio.
+    """
+    for key in ("n_sequences", "n_targets", "decode_steps"):
+        if key in row:
+            return row[key]
+    return ""
 
 
 def _throughput(row):
@@ -87,7 +114,11 @@ def build_rows(reports):
         value, unit = _throughput(r)
         rows.append({
             "workload": r.get("workload", "?"),
+            "size": _problem_size(r),
             "tree": _tree_label(meta),
+            # Without this, two runs of the same workload made at different points
+            # on this branch are indistinguishable in the table.
+            "commit": meta.get("git_commit", ""),
             "gpus": meta.get("num_gpus", 1),
             "gpu": meta.get("gpu", "?"),
             "batch_size": r.get("batch_size", ""),
@@ -96,7 +127,8 @@ def build_rows(reports):
             "unit": unit,
             "peak_mem_mib": round(r.get("peak_reserved_mib", float("nan")), 0),
         })
-    rows.sort(key=lambda d: (d["workload"], d["batch_size"] if d["batch_size"] != "" else 0,
+    rows.sort(key=lambda d: (d["workload"], d["size"] if d["size"] != "" else 0,
+                             d["batch_size"] if d["batch_size"] != "" else 0,
                              d["gpus"], d["tree"]))
     return rows
 
@@ -104,19 +136,20 @@ def build_rows(reports):
 def add_speedups(rows):
     """Annotate each optimized row with its speedup over the matching baseline."""
     baseline = {
-        (r["workload"], r["batch_size"], r["gpus"]): r
+        (r["workload"], r["size"], r["batch_size"], r["gpus"]): r
         for r in rows if r["tree"] == "baseline"
     }
     for r in rows:
-        key = (r["workload"], r["batch_size"], 1)
+        key = (r["workload"], r["size"], r["batch_size"], 1)
         base = baseline.get(key)
         if base is None or r["tree"] == "baseline" or not base["wall_ms"]:
             r["speedup"] = ""
             r["mem_ratio"] = ""
         else:
             r["speedup"] = f"{base['wall_ms'] / r['wall_ms']:.2f}x"
-            r["mem_ratio"] = (f"{base['peak_mem_mib'] / r['peak_mem_mib']:.2f}x"
-                              if r["peak_mem_mib"] else "")
+            mem = r["peak_mem_mib"]
+            r["mem_ratio"] = (f"{base['peak_mem_mib'] / mem:.2f}x"
+                              if mem and mem == mem else "")  # skip 0 and nan
     return rows
 
 
@@ -148,14 +181,14 @@ def main() -> None:
     sys.path.insert(0, _HERE)
     import harness
 
-    reports = _load_reports(args.results_dir)
+    reports = _load_reports(args.results_dir, exclude=f"{args.out}.json")
     if not reports:
         raise SystemExit(f"no bench reports found under {args.results_dir}/ - "
                          f"run benchmarks/inference/bench.sbatch first")
 
     rows = add_speedups(build_rows(reports))
-    columns = ["workload", "tree", "gpus", "gpu", "batch_size", "wall_ms",
-               "throughput", "unit", "peak_mem_mib", "speedup", "mem_ratio"]
+    columns = ["workload", "size", "tree", "commit", "gpus", "gpu", "batch_size",
+               "wall_ms", "throughput", "unit", "peak_mem_mib", "speedup", "mem_ratio"]
 
     metadata = {"n_reports": len(reports)}
     if args.checkpoint:
