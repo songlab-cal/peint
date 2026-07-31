@@ -115,6 +115,31 @@ Correctness for every row above: `parity.py --tier 1` reports
 `max_abs_diff == 0.0` on logits, likelihood, generation and homology (the last
 also confirms identical ranking).
 
+### Multi-GPU scaling
+
+All-vs-all on the optimized tree, 4× A5000, N=400 (159 600 pairs):
+
+| GPUs | wall | throughput | speedup |
+|---|---|---|---|
+| 1 | 184.6 s | 864 pairs/s | — |
+| 4 | 72.9 s | 2 190 pairs/s | **2.53×** |
+
+The shortfall from 4× is startup, not sharding: ideal compute is 184.6/4 ≈ 46 s,
+plus roughly 25 s of per-rank model construction, which is 71 s — essentially the
+72.9 s measured. The compute itself scales linearly; the fixed cost is what you
+are paying for, and it shrinks as a fraction of a longer run.
+
+At N=120 the same comparison is a *slowdown* (27.7 s → 37.8 s). See the fixed-cost
+note below before reaching for `--num-gpus`.
+
+Hit lists were identical between the 1-GPU and 4-GPU runs across 14 280 hits.
+
+Note the two single-GPU homology rows are not directly comparable to each other:
+throughput rises with N (864 pairs/s at N=400 vs 661 at N=200) because the
+per-reference encoder pass amortizes over more queries. A baseline run at N=400
+was not made, so the combined Tier-1 + 4-GPU figure against the original code is
+an extrapolation, not a measurement.
+
 ## What was slow, and why
 
 Measured on the release checkpoint; see the commit messages for the full list.
