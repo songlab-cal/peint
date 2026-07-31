@@ -32,7 +32,11 @@ FAST_ROOT=/scratch/users/yufan.cao/peint-dev/rebuttal/peint-fast
 cd "$FAST_ROOT"
 
 NGPU=${NGPU:-4}
+# Correctness needs only enough references to cross shard boundaries; scaling
+# needs enough work to amortize the one-off process spawn and per-rank model
+# load, which is ~15 s of ESM2-150M construction on each GPU.
 N_SEQ=${N_SEQ:-120}
+N_SEQ_SCALE=${N_SEQ_SCALE:-400}
 BS=${BS:-32}
 OUTDIR=${OUTDIR:-results/shard}
 mkdir -p "$OUTDIR"
@@ -58,10 +62,10 @@ if bad:
 print(f"[shard] hit lists IDENTICAL across GPU counts ({len(a)} hits)")
 PY
 
-echo "=== scaling ==="
+echo "=== scaling (N=$N_SEQ_SCALE, single timed pass each) ==="
 python benchmarks/inference/run_workload.py --repo . --workload homology --mode bench \
-  --n-sequences "$N_SEQ" --batch-sizes "$BS" --iters 3 --num-gpus 1 \
+  --n-sequences "$N_SEQ_SCALE" --batch-sizes "$BS" --iters 1 --num-gpus 1 \
   --out "$OUTDIR/bench_1gpu"
 python benchmarks/inference/run_workload.py --repo . --workload homology --mode bench \
-  --n-sequences "$N_SEQ" --batch-sizes "$BS" --iters 3 --num-gpus "$NGPU" \
+  --n-sequences "$N_SEQ_SCALE" --batch-sizes "$BS" --iters 1 --num-gpus "$NGPU" \
   --out "$OUTDIR/bench_${NGPU}gpu"

@@ -18,6 +18,15 @@ that actually works — and it costs one model load per rank, not per item.
 Determinism: each item is seeded from its own index, not from the rank, so
 results do not depend on how many GPUs happened to be available. Results are
 merged back in the original item order for the same reason.
+
+**Fixed cost, and when sharding is worth it.** Every :func:`run_sharded` call
+spawns its ranks and each rank constructs the model from scratch — roughly 15 s
+of ESM2-150M build per GPU. That is paid once per *call*, not per item, so it
+amortizes over a long work list and does not over a short one. Measured on 4x
+A5000: a 120-sequence all-vs-all takes 27.7 s on one GPU and 37.8 s across four,
+because ~28 s of compute cannot cover four model loads. The crossover is around a
+minute of single-GPU work; above that, scaling approaches linear. Call this once
+with the whole work list — never in a loop.
 """
 
 from __future__ import annotations

@@ -211,8 +211,17 @@ def main() -> None:
         for bs in batch_sizes:
             run, info = workloads.homology_callable(checkpoint, corpus, args.device, bs,
                                                     num_gpus=args.num_gpus)
-            mem = harness.peak_memory(run, device)
+            if args.num_gpus > 1:
+                # Memory is allocated inside the spawned ranks, so the parent's
+                # allocator sees nothing. Reporting 0 here would be a lie; the
+                # per-rank figure is the single-GPU number for its shard.
+                mem = {"peak_allocated_mib": float("nan"),
+                       "peak_reserved_mib": float("nan")}
+            else:
+                mem = harness.peak_memory(run, device)
             # All-vs-all is expensive; one timed pass is enough at large N.
+            # No warmup for the sharded path either - a warmup call would pay the
+            # process spawn and per-rank model load a second time.
             timing = harness.cuda_timeit(run, warmup=0, iters=max(1, args.iters // 3),
                                          device=device)
             n = len(corpus)

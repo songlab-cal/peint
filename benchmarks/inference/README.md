@@ -75,6 +75,19 @@ the package already tried to parallelize
 `nn.Module` to `multiprocessing.Pool`, which cannot work under fork or spawn — so
 every inference workload had in practice been single-GPU.
 
+### Sharding has a fixed cost — check your work list is big enough
+
+Each `run_sharded` call spawns its ranks and each rank builds the model from
+scratch (~15 s of ESM2-150M construction per GPU), paid once per *call*. On 4×
+A5000 a 120-sequence all-vs-all took **27.7 s on one GPU and 37.8 s on four** —
+28 s of compute cannot cover four model loads. Above roughly a minute of
+single-GPU work it pays off and scaling approaches linear. Call it once with the
+whole work list, never inside a loop.
+
+Peak-memory numbers are reported as `nan` for sharded runs: the allocations
+happen inside the spawned ranks, where the parent's allocator cannot see them.
+The per-rank figure is the single-GPU number for that rank's shard.
+
 ## What was slow, and why
 
 Measured on the release checkpoint; see the commit messages for the full list.
