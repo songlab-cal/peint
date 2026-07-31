@@ -88,6 +88,33 @@ Peak-memory numbers are reported as `nan` for sharded runs: the allocations
 happen inside the spawned ranks, where the parent's allocator cannot see them.
 The per-rank figure is the single-GPU number for that rank's shard.
 
+## Measured
+
+One RTX A5000, release `peint.ckpt`, ESM2-150M backbone. Full table:
+`results/efficiency.md` (regenerate with `efficiency_table.py`).
+
+| workload | setting | baseline | optimized | speedup | peak mem |
+|---|---|---|---|---|---|
+| generation | batch 1, 568 decode steps | 3290 ms | 2365 ms | **1.39×** | 1048 → 1012 MiB |
+| generation | batch 8 | 3369 ms | 2453 ms | **1.37×** | 1392 → 1156 MiB |
+| generation | batch 32 | 3587 ms | 2485 ms | **1.44×** | 2866 → 1848 MiB |
+| generation | batch 64 | 3803 ms | 2652 ms | **1.43×** | 5516 → 2828 MiB (1.95×) |
+| likelihood / VEP | 2048 targets, batch 32 | 5444 ms | 1840 ms | **2.96×** | 2144 → 1744 MiB |
+| likelihood / VEP | 2048 targets, batch 128 | 5435 ms | 1931 ms | **2.81×** | 6066 → 4652 MiB |
+| homology all-vs-all | N=200 (39 800 pairs) | 129.5 s | 60.2 s | **2.15×** | 2144 → 1744 MiB |
+
+Generation throughput at batch 64 goes from 9 558 to 13 707 tokens/s while using
+roughly half the memory — which is itself a throughput lever, since it leaves
+room for a larger batch.
+
+The likelihood and homology gains are mostly tokenization: 2048 sequences at
+fair-esm's ~2 ms/sequence is ~4 s of pure Python before any GPU work, which is
+almost exactly the 3.6 s that disappeared.
+
+Correctness for every row above: `parity.py --tier 1` reports
+`max_abs_diff == 0.0` on logits, likelihood, generation and homology (the last
+also confirms identical ranking).
+
 ## What was slow, and why
 
 Measured on the release checkpoint; see the commit messages for the full list.
