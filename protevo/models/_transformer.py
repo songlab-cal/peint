@@ -45,6 +45,13 @@ from protevo.utils import amino_acids
 DEFAULT_MAX_SEQ_LEN = 1022  # ESM2's max sequence length minus special tokens
 STANDARD_STATES = list(amino_acids) + ['<eos>']
 
+# How often the generation loop checks whether every sequence has emitted <eos>.
+# The check reads a CUDA bool tensor into Python, which is a hard device sync;
+# amortizing it over this many steps keeps the decode loop asynchronous. Any
+# tokens produced after the true stopping point are past <eos> and get truncated
+# by decode_sequences, so the generated strings do not depend on this value.
+EOS_CHECK_INTERVAL = 16
+
 
 def _config_from_kwargs(
     embed_dim: int,
@@ -147,6 +154,20 @@ class _PeintTransformerBase(nn.Module, ABC):
         self.esm = esm_model
         self.vocab = esm_vocab
         self.esm.eval()
+
+        # Inference-time lookups, built lazily and then reused across calls.
+        # Plain attributes rather than buffers/submodules so state_dict is
+        # unchanged and existing checkpoints keep loading.
+        self._inv_vocab = None   # token id -> token string, for decode_sequences
+        self._zero_idx = None    # non-amino-acid token ids banned during sampling
+
+        # PEINT reads only the backbone's hidden representations (see
+        # _compute_language_model_representations), never its LM-head logits, and
+        # it holds its own copy of the head for the encoder-side MLM logits. Tell
+        # our ESM2 wrappers to skip that dead computation. Guarded by hasattr so a
+        # stock fair-esm backbone is left untouched.
+        if hasattr(self.esm, 'emb_layer_norm_after') and hasattr(self.esm, 'lm_head'):
+            self.esm.return_logits = False
         mode = self.config.esm_finetune_mode
         if mode in ("frozen", "lora"):
             self.esm.requires_grad_(False)
@@ -295,10 +316,18 @@ class _PeintTransformerBase(nn.Module, ABC):
         Returns:
             List of amino acid sequence strings (without CLS, truncated at EOS)
         """
-        inv_vocab = {v: k for k, v in self.vocab.to_dict().items()}
+        if self._inv_vocab is None:
+            self._inv_vocab = {v: k for k, v in self.vocab.to_dict().items()}
+        inv_vocab = self._inv_vocab
+
+        # One device->host transfer for the whole batch. The original did a
+        # `.item()` per token on a CUDA tensor, i.e. B x L individual syncs
+        # (~38k for a batch of 64 at length 600) after every generate() call.
+        decoded_rows = decoded[:, 1:].tolist()  # drop cls
+
         output_sequences = []
-        for seq in decoded:
-            decoded_str = ''.join([inv_vocab.get(p.item()) for p in seq[1:]])  # remove cls
+        for row in decoded_rows:
+            decoded_str = ''.join([inv_vocab.get(p) for p in row])
             eos_idx = decoded_str.find('<eos>')
             if eos_idx != -1:
                 decoded_str = decoded_str[:eos_idx]
@@ -319,11 +348,17 @@ class _PeintTransformerBase(nn.Module, ABC):
         x_attn_mask = x.eq(self.vocab.padding_idx)
         y_decoded = torch.tensor([self.vocab.cls_idx]).unsqueeze(0).repeat(batch_size, 1).to(device)
         eos_reached = torch.zeros(batch_size, dtype=torch.bool).to(device)
-        zero_idx = torch.tensor([
-            self.vocab.get_idx(tok)
-            for tok in self.vocab.all_toks
-            if tok not in STANDARD_STATES
-        ])
+        # Built once and kept on the device. It used to be rebuilt per call and
+        # left on the CPU, so `logits[..., zero_idx] = -inf` copied it host->device
+        # on every generated token.
+        if self._zero_idx is None:
+            self._zero_idx = torch.tensor([
+                self.vocab.get_idx(tok)
+                for tok in self.vocab.all_toks
+                if tok not in STANDARD_STATES
+            ])
+        zero_idx = self._zero_idx.to(device)
+        self._zero_idx = zero_idx
         return batch_size, x_attn_mask, y_decoded, eos_reached, zero_idx
 
     def evaluate_transition_logits(
@@ -728,21 +763,32 @@ class PeintGenerator(PeintTransformer):
         y_attn_mask = y_decoded.eq(self.vocab.padding_idx)
         logits = self.forward(x, y_decoded, t, x_attn_mask, y_attn_mask, use_cache=False)
 
-        for _ in range(max_decode_steps - 1):
+        last_step = max_decode_steps - 2
+        for step in range(max_decode_steps - 1):
             logits = logits[:, -1, :] / temperature
             logits[..., zero_idx] = -np.inf
 
             next_token = sampling_function(logits, p=p)
 
-            y_new = next_token
-            y_attn_mask = y_new.eq(self.vocab.padding_idx)
-            logits = self.forward(x, y_new, t, x_attn_mask, y_attn_mask, use_cache=True)
-
             y_decoded = torch.cat([y_decoded, next_token], dim=1)
-
             eos_reached |= (next_token.squeeze(-1) == self.vocab.eos_idx)
-            if eos_reached.all():
+
+            # The original loop forwarded after sampling on every iteration,
+            # including the last one, whose logits were then discarded. Break
+            # before that final wasted decoder pass.
+            if step == last_step:
                 break
+
+            # `eos_reached.all()` forces a GPU->CPU sync, and running it on every
+            # token serializes the whole decode loop against the CUDA queue.
+            # Checking periodically costs at most EOS_CHECK_INTERVAL - 1 extra
+            # steps, and those tokens are all past <eos>, which decode_sequences
+            # truncates - so the returned strings are unchanged.
+            if (step + 1) % EOS_CHECK_INTERVAL == 0 and eos_reached.all():
+                break
+
+            y_attn_mask = next_token.eq(self.vocab.padding_idx)
+            logits = self.forward(x, next_token, t, x_attn_mask, y_attn_mask, use_cache=True)
 
         self._reset_kv_cache()
         return self.decode_sequences(y_decoded)

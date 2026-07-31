@@ -89,10 +89,31 @@ class GeometricTimeEmbedder(nn.Module):
         super().__init__()
         self.frequency_embedding_size = frequency_embedding_size
         self.start=start
-        self.stop=stop 
-    
+        self.stop=stop
+
+        # The geometric frequency grid is a constant, but the original code
+        # rebuilt it with np.geomspace on the CPU and copied it H2D on *every*
+        # forward - i.e. once per generated token, per call. Precompute it once.
+        # Stored in float64 (np.geomspace's native precision) and cast to the
+        # caller's dtype in timestep_embedding, exactly reproducing the old
+        # torch.tensor(np.geomspace(...), dtype=timesteps.dtype) round trip.
+        # persistent=False keeps it out of state_dict, so existing checkpoints
+        # still load with strict=True.
+        self.register_buffer(
+            'freqs',
+            torch.tensor(
+                np.geomspace(start=start, stop=stop, num=frequency_embedding_size // 2),
+                dtype=torch.float64,
+            ),
+            persistent=False,
+        )
+
     def timestep_embedding(self, timesteps, dim):
-        freqs = torch.tensor(np.geomspace(start=self.start, stop=self.stop, num=dim//2), dtype=timesteps.dtype).to(timesteps.device)
+        assert dim // 2 == self.freqs.numel(), (
+            f"cached frequency grid has {self.freqs.numel()} entries but dim={dim} "
+            f"requires {dim // 2}"
+        )
+        freqs = self.freqs.to(device=timesteps.device, dtype=timesteps.dtype)
         args = timesteps[:, None].float() * freqs[None]
         embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
         if dim % 2:
@@ -386,26 +407,38 @@ class KVCached_MHCA(RopeFlashMHA):
             layer_idx=layer_idx)
         
         self.max_seq_len = max_seq_len
-        self.kv_cache = None
-        self.cache_size = 0
+        # Encoder K/V are cached in *unpadded* (varlen) form together with the
+        # cu_seqlens/max_seqlen metadata that flash-attn needs. The encoder
+        # memory and its padding mask are fixed for the whole generate() call,
+        # so the old code was re-running unpad_input over the entire
+        # [B, L_enc, 2, H, hd] cache on every layer on every generated token -
+        # an O(B*L_enc) gather plus a .max().item() device sync per layer per
+        # token. Caching the unpadded form removes both, and the flat buffer is
+        # sized to the actual number of source residues instead of max_seq_len.
+        self.kv_cache = None          # [total_nonpad, 2, H, hd] once prefilled
+        self.cache_size = 0           # padded encoder length (Ly)
+        self._cache_batch_size = 0
+        self._cu_seqlens_k = None
+        self._max_seqlen_k = 0
 
     def init_kv_cache(self, batch_size):
-        # Initialize the KV cache with empty tensors
-        self.kv_cache = torch.empty(batch_size, self.max_seq_len, 2, self.num_heads, self.head_dim, device=self.q_proj.weight.device)
+        """Drop any cached encoder K/V. Prefill (``forward`` with ``y``) refills it."""
+        self.kv_cache = None
         self.cache_size = 0
+        self._cache_batch_size = batch_size
+        self._cu_seqlens_k = None
+        self._max_seqlen_k = 0
 
     def forward(self, x, y=None, x_padding_mask=None, y_padding_mask=None, decoder_cache_size=0):
         Bx, Lx, Dx = x.size()
-
-        if self.kv_cache is None or self.kv_cache.size(0) != Bx:
-            self.init_kv_cache(Bx)
 
         q = self.q_proj(x)
         q *= self.head_dim ** -0.5
         q = rearrange(q, 'b l (n h) -> b l n h', n=self.num_heads)
 
         if y is not None:
-            # Update KV cache
+            # ---- Prefill: project the encoder memory, unpad it once, and keep
+            # the varlen metadata for every subsequent decode step.
             By, Ly, Dy = y.size()
             k = self.k_proj(y)
             v = self.v_proj(y)
@@ -414,34 +447,62 @@ class KVCached_MHCA(RopeFlashMHA):
 
             #rotate q and k,v here
             q, kv = self.rot_emb(q, torch.stack([k,v], dim=2), seqlen_offset=0, max_seqlen = self.max_seq_len)
-            
-            self.kv_cache[:, self.cache_size:self.cache_size+Ly] = kv
-            self.cache_size += Ly
+
+            if y_padding_mask is None:
+                y_padding_mask = torch.ones(By, Ly, device=y.device, dtype=torch.bool)
+
+            kv, idx_k, cu_seqlens_k, max_seqlen_k = unpad_input(kv, y_padding_mask)
+
+            self.kv_cache = kv
+            self.cache_size = Ly
+            self._cache_batch_size = By
+            self._cu_seqlens_k = cu_seqlens_k
+            self._max_seqlen_k = max_seqlen_k
 
         else:
-            # Use cached KV
-            kv = self.kv_cache[:, :self.cache_size].to(q.dtype)
+            # ---- Decode: reuse the unpadded encoder K/V verbatim.
+            assert self.kv_cache is not None, (
+                "cross-attention KV cache is empty; call forward with the encoder "
+                "memory (y) once before decoding"
+            )
+            assert self._cache_batch_size == Bx, (
+                f"cached encoder K/V were built for batch size "
+                f"{self._cache_batch_size}, got {Bx}"
+            )
+            # Cached K/V are already rotated (prefill rotates them once) and only
+            # q is rotated below, so this may safely alias the cache: nothing here
+            # mutates kv in place. Do not pass it to rot_emb - that rotates in
+            # place and would corrupt the cache for every later step.
+            kv = self.kv_cache.to(q.dtype)
+            cu_seqlens_k = self._cu_seqlens_k
+            max_seqlen_k = self._max_seqlen_k
 
             #rotate just q, use the cached_cos_sin
             #check if need to update
             if Lx + decoder_cache_size > self.max_seq_len:
                 self.rot_emb._update_cos_sin_cache(Lx + decoder_cache_size, device = q.device, dtype=q.dtype)
-            
+
             cos, sin = self.rot_emb._cos_cached, self.rot_emb._sin_cached
             q = apply_rotary_emb_torch(q, cos[decoder_cache_size], sin[decoder_cache_size]) #this gets the seqlen offset for you
 
-        if x_padding_mask is None:
-            x_padding_mask = torch.ones(Bx, Lx, device=x.device, dtype=torch.bool)
-
-        q, idx_q, cu_seqlens_q, max_seqlen_q = unpad_input(q, x_padding_mask)
-
-        if y_padding_mask is None:
-            y_padding_mask = torch.ones(Bx, self.cache_size, device=x.device, dtype=torch.bool)
-
-        kv, idx_k, cu_seqlens_k, max_seqlen_k = unpad_input(kv, y_padding_mask)
+        if y is None and Lx == 1:
+            # Single-token decode. The query is a token that was just sampled, and
+            # sampling_function can never emit <pad> (generate() masks every
+            # non-amino-acid logit to -inf), so the query mask is all-attend and
+            # unpad_input degenerates to an identity gather with
+            # cu_seqlens_q = arange(Bx + 1), max_seqlen_q = 1. Building that
+            # directly avoids one more .max().item() sync per layer per token.
+            q_flat = rearrange(q, 'b l n h -> (b l) n h')
+            idx_q = None
+            cu_seqlens_q = torch.arange(0, Bx + 1, dtype=torch.int32, device=q.device)
+            max_seqlen_q = Lx
+        else:
+            if x_padding_mask is None:
+                x_padding_mask = torch.ones(Bx, Lx, device=x.device, dtype=torch.bool)
+            q_flat, idx_q, cu_seqlens_q, max_seqlen_q = unpad_input(q, x_padding_mask)
 
         out = flash_attn_varlen_kvpacked_func(
-            q,
+            q_flat,
             kv,
             cu_seqlens_q,
             cu_seqlens_k,
@@ -452,7 +513,10 @@ class KVCached_MHCA(RopeFlashMHA):
             causal=self.causal,
         )
 
-        out = pad_input(out, idx_q, Bx, Lx)
+        if idx_q is None:
+            out = rearrange(out, '(b l) h d -> b l h d', b=Bx)
+        else:
+            out = pad_input(out, idx_q, Bx, Lx)
         out = rearrange(out, '... h d -> ... (h d)')
 
         return self.out_proj(out)
@@ -479,20 +543,37 @@ class EncoderCachedFlashMHCA(RopeFlashMHA):
         self.kv_cache = None
         self.cache_size = 0
 
-    def init_kv_cache(self, batch_size):
-        # Initialize the KV cache with empty tensors
-        self.kv_cache = torch.empty(batch_size, self.max_seq_len, 2, self.num_heads, self.head_dim, device=self.q_proj.weight.device)
+    def init_kv_cache(self, batch_size, dtype=None):
+        """Allocate the encoder K/V cache in the compute dtype.
+
+        Allocating with a bare ``torch.empty`` (float32) while evaluation runs
+        under bf16 autocast made the ``kv_cache[...].to(q.dtype)`` read below
+        materialize a converted copy of the whole cache for every layer of every
+        likelihood batch. bf16 -> bf16 is lossless, so matching the compute dtype
+        turns that read into a no-op view without changing any value.
+        """
+        self.kv_cache = torch.empty(
+            batch_size, self.max_seq_len, 2, self.num_heads, self.head_dim,
+            device=self.q_proj.weight.device,
+            dtype=dtype,
+        )
         self.cache_size = 0
 
     def forward(self, x, y=None, x_padding_mask=None, y_padding_mask=None):
         Bx, Lx, Dx = x.size()
 
-        if self.kv_cache is None or self.kv_cache.size(0) < Bx:
-            self.init_kv_cache(Bx)
-
         q = self.q_proj(x)
         q *= self.head_dim ** -0.5
         q = rearrange(q, 'b l (n h) -> b l n h', n=self.num_heads)
+
+        # Checked after projecting so the compute dtype is known. Batch size only
+        # ever shrinks within one evaluate_likelihood call (final partial batch),
+        # and the dtype is fixed by the autocast context, so this fires on the
+        # prefill batch only and never discards a live cache mid-evaluation.
+        if (self.kv_cache is None
+                or self.kv_cache.size(0) < Bx
+                or self.kv_cache.dtype != q.dtype):
+            self.init_kv_cache(Bx, dtype=q.dtype)
 
         if y is not None:
             # Update KV cache
@@ -509,7 +590,15 @@ class EncoderCachedFlashMHCA(RopeFlashMHA):
         else:
             # Use cached KV
             #note that batch size may be smaller than max during final batch
-            kv = self.kv_cache[:Bx, :self.cache_size].to(q.dtype)
+            cached = self.kv_cache[:Bx, :self.cache_size]
+            # This cache holds *unrotated* K/V and rot_emb below rotates in place,
+            # so what we hand it must be a private copy, never a view of the cache.
+            # Previously the cache was float32 while compute ran in bf16, and the
+            # dtype conversion happened to produce that copy. Now that the cache
+            # matches the compute dtype the conversion is a no-op, so the copy has
+            # to be explicit - otherwise each batch re-rotates the cache and the
+            # scores drift further with every batch.
+            kv = cached.clone() if cached.dtype == q.dtype else cached.to(q.dtype)
 
         q, kv = self.rot_emb(q, kv, seqlen_offset=0, max_seqlen=max(q.shape[1], kv.shape[1]))
 
@@ -574,20 +663,32 @@ class KVCached_MHSA(nn.Module):
 
         self.kv_cache = None
         self.cache_size = 0
+        # Remembers the length requested by generate() so that a dtype-driven
+        # reallocation does not silently fall back to max_seq_len.
+        self._requested_seq_len = None
 
-    def init_kv_cache(self, batch_size, seq_len=None):
+    def init_kv_cache(self, batch_size, seq_len=None, dtype=None):
+        """Allocate the self-attention KV cache.
+
+        ``dtype`` should be the *compute* dtype. The cache used to be allocated
+        with a bare ``torch.empty`` (i.e. float32) while decoding runs under bf16
+        autocast, which forced ``kv_cache[...].to(q.dtype)`` to materialize a full
+        dtype-converted copy of the growing cache on every layer on every token.
+        Allocating in the compute dtype makes that read a no-op. bf16 -> bf16 is
+        a lossless round trip, so cached values are bit-identical either way.
+        """
+        self._requested_seq_len = seq_len
         if seq_len is None:
             seq_len = self.max_seq_len
-        self.kv_cache = torch.empty(batch_size, seq_len, 2, self.num_heads, self.head_dim, device=self.q_proj.weight.device)
+        self.kv_cache = torch.empty(
+            batch_size, seq_len, 2, self.num_heads, self.head_dim,
+            device=self.q_proj.weight.device,
+            dtype=dtype,
+        )
         self.cache_size = 0
 
     def forward(self, x, x_padding_mask=None):
         batch_size, seq_len, _ = x.shape
-
-        if self.kv_cache is None or self.kv_cache.size(0) != batch_size:
-            self.init_kv_cache(batch_size)
-
-        assert self.cache_size + seq_len <= self.kv_cache.size(1), "KV cache is full"
 
         q = self.q_proj(x)
         k = self.k_proj(x)
@@ -599,13 +700,32 @@ class KVCached_MHSA(nn.Module):
         k = rearrange(k, 'b l (n h) -> b l n h', n=self.num_heads)
         v = rearrange(v, 'b l (n h) -> b l n h', n=self.num_heads)
 
-        # Apply rotary embeddings - returns k (kv)
-        q, k = self.rot_emb(q, torch.stack([k,v], dim=2), seqlen_offset=self.cache_size)
+        # (Re)allocate in the compute dtype. Projections above touch no cache
+        # state, so hoisting them above this check is behaviour-preserving.
+        if (self.kv_cache is None
+                or self.kv_cache.size(0) != batch_size
+                or self.kv_cache.dtype != q.dtype):
+            self.init_kv_cache(batch_size, self._requested_seq_len, dtype=q.dtype)
+
+        assert self.cache_size + seq_len <= self.kv_cache.size(1), "KV cache is full"
+
+        # Apply rotary embeddings - returns k (kv).
+        # max_seqlen pins the cos/sin table to the full cache length so it is
+        # built once. Without it, flash-attn's _update_cos_sin_cache saw
+        # seqlen+offset grow by one each step and rebuilt the entire table on
+        # every token in every layer. Position i's value does not depend on the
+        # table length, so this is bit-exact.
+        q, k = self.rot_emb(
+            q,
+            torch.stack([k, v], dim=2),
+            seqlen_offset=self.cache_size,
+            max_seqlen=self.kv_cache.size(1),
+        )
 
         # Update KV cache
         self.kv_cache[:, self.cache_size:self.cache_size+seq_len] = k
 
-        # Combine current and cached KV
+        # Combine current and cached KV (no-op cast now that dtypes agree)
         k = self.kv_cache[:, :self.cache_size+seq_len].to(q.dtype)
 
         # Update cache size
@@ -623,8 +743,10 @@ class KVCached_MHSA(nn.Module):
         return self.out_proj(output)
 
     def reset_kv_cache(self):
-        if self.kv_cache is not None:
-            self.kv_cache.zero_()
+        # Only cache_size needs clearing: every read is bounded by cache_size and
+        # every position is written before it is read, so the old full-buffer
+        # zero_() was a redundant memset of [B, max_decode_steps, 2, H, hd] per
+        # layer, per reset.
         self.cache_size = 0
 
 class KV_CachedFlashMHADecoderBlock(nn.Module):

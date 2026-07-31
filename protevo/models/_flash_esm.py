@@ -78,8 +78,17 @@ class ESM2Flash(ESM2):
             if (layer_idx + 1) in repr_layers:
                 hidden_representations[layer_idx + 1] = h_x
 
-        h_x = self.emb_layer_norm_after(h_x) #final_layer_norm
-        h_x = self.lm_head(h_x)
+        # PEINT only ever reads result['representations'], and it has its own copy
+        # of the LM head for the encoder-side MLM logits. Computing the backbone's
+        # head here - a [B, L, 640] LayerNorm plus a 640 -> 640 dense, gelu and a
+        # tied 640 -> 33 projection - ran on every encoder call and was thrown
+        # away. `return_logits` is opt-out so external callers keep the old
+        # behaviour; see _PeintTransformerBase.__init__.
+        if getattr(self, 'return_logits', True):
+            h_x = self.emb_layer_norm_after(h_x) #final_layer_norm
+            h_x = self.lm_head(h_x)
+        else:
+            h_x = None
 
         result = {'logits': h_x, 'representations': hidden_representations}
 
@@ -150,8 +159,13 @@ class ESM2Model(ESM2):
             if (layer_idx + 1) in repr_layers:
                 hidden_representations[layer_idx + 1] = h_x
 
-        h_x = self.emb_layer_norm_after(h_x) #final_layer_norm
-        h_x = self.lm_head(h_x)
+        # See the note in ESM2Flash.forward - the backbone's own LM head output is
+        # never consumed by PEINT.
+        if getattr(self, 'return_logits', True):
+            h_x = self.emb_layer_norm_after(h_x) #final_layer_norm
+            h_x = self.lm_head(h_x)
+        else:
+            h_x = None
 
         result = {'logits': h_x, 'representations': hidden_representations}
 

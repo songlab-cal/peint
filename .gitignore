@@ -16,6 +16,12 @@ env/
 
 # Model checkpoints and weights
 model_checkpoints/
+# ...including when it is a symlink into a sibling worktree (the trailing-slash
+# pattern above only matches real directories)
+/model_checkpoints
+
+# Benchmark and parity outputs
+results/
 *.ckpt
 *.pt
 *.pth
