@@ -19,6 +19,7 @@ from protevo.homology_detection._base import (
     Proteome,
     get_distance,
 )
+from protevo.inference._tokenize import build_token_lut, encode_all
 from protevo.models._loading import load_peint_model
 from protevo.models._transformer_modules import FLASH_AVAILABLE
 
@@ -81,12 +82,24 @@ class PeintHomologySearcher(HomologySearcher):
             model_type="evaluator",
             use_flash=config.use_flash,
         )
+        self._query_lut = build_token_lut(self.vocab)
+
+    def _tokenize_queries(self, query_seqs: List[str]):
+        """Tokenize a query set once, for reuse across every reference.
+
+        Every reference re-scores the same queries, and tokenization used to run
+        inside that loop via fair-esm's ~2 ms/sequence ``Alphabet.encode`` — so an
+        N-sequence all-vs-all paid O(N^2) pure-Python tokenization before any GPU
+        work. Hoisting it makes that O(N).
+        """
+        return encode_all(query_seqs, self.vocab, lut=self._query_lut)
 
     def _compare_sequences(
         self,
         reference_seq: str,
         query_seqs: List[str],
         times: List[float],
+        query_tokens=None,
     ) -> List[float]:
         """Compute negative log-likelihoods for query sequences against a reference.
 
@@ -94,6 +107,8 @@ class PeintHomologySearcher(HomologySearcher):
             reference_seq: Single reference sequence string
             query_seqs: List of query sequence strings
             times: List of evolutionary times (one per query)
+            query_tokens: Optional pre-tokenized queries from :meth:`_tokenize_queries`,
+                aligned with ``query_seqs``.
 
         Returns:
             List of negative log-likelihoods (lower = more similar)
@@ -106,6 +121,7 @@ class PeintHomologySearcher(HomologySearcher):
                     t=times,
                     device=self.device,
                     batch_size=self.config.batch_size,
+                    y_tokens=query_tokens,
                 )
         return nlls.tolist() if hasattr(nlls, "tolist") else list(nlls)
 
@@ -133,9 +149,10 @@ class PeintHomologySearcher(HomologySearcher):
         query_seqs = [seq for _, seq in queries]
         query_ids = [qid for qid, _ in queries]
         times = [self.config.time] * len(queries)
+        query_tokens = self._tokenize_queries(query_seqs)
 
         for db_id, db_seq in tqdm(database, desc="Searching database"):
-            nlls = self._compare_sequences(db_seq, query_seqs, times)
+            nlls = self._compare_sequences(db_seq, query_seqs, times, query_tokens)
 
             for query_id, nll in zip(query_ids, nlls):
                 query_results[query_id].append(
@@ -170,6 +187,8 @@ class PeintHomologySearcher(HomologySearcher):
         seq_ids = [sid for sid, _ in sequences]
         seqs = [seq for _, seq in sequences]
         times = [self.config.time] * len(sequences)
+        # Tokenize the corpus once; the per-reference lists below only re-slice it.
+        tokens = self._tokenize_queries(seqs)
 
         for i, (ref_id, ref_seq) in enumerate(tqdm(sequences, desc="All-vs-all")):
             # Compare against all other sequences
@@ -177,11 +196,12 @@ class PeintHomologySearcher(HomologySearcher):
             other_seqs = [seqs[j] for j in other_indices]
             other_ids = [seq_ids[j] for j in other_indices]
             other_times = [times[j] for j in other_indices]
+            other_tokens = [tokens[j] for j in other_indices]
 
             if not other_seqs:
                 continue
 
-            nlls = self._compare_sequences(ref_seq, other_seqs, other_times)
+            nlls = self._compare_sequences(ref_seq, other_seqs, other_times, other_tokens)
 
             for query_id, nll in zip(other_ids, nlls):
                 hits.append(
@@ -194,6 +214,53 @@ class PeintHomologySearcher(HomologySearcher):
                 )
 
         return hits
+
+    def tokenize_proteomes(self, proteomes: Proteome) -> Dict[str, list]:
+        """Tokenize every proteome once, keyed by proteome name."""
+        return {
+            name: self._tokenize_queries([seq for _, seq in seqs])
+            for name, seqs in proteomes.items()
+        }
+
+    def build_query_set(
+        self,
+        proteomes: Proteome,
+        ref_proteome: str,
+        distances: Optional[DistanceMatrix],
+        skip_same_proteome: bool,
+        tokens_by_proteome: Optional[Dict[str, list]] = None,
+    ):
+        """Assemble the query set every reference in ``ref_proteome`` is scored against.
+
+        The set depends only on which proteome the reference belongs to, never on
+        the individual reference, so it is built once per proteome. Shared by the
+        serial :meth:`all_vs_all_proteomes` and the multi-GPU driver in
+        ``protevo.inference._runners`` so both produce identical ordering.
+
+        Returns:
+            ``(query_seqs, query_times, query_info, query_tokens)`` where
+            ``query_info`` holds ``(query_id, query_proteome)`` pairs.
+        """
+        if tokens_by_proteome is None:
+            tokens_by_proteome = self.tokenize_proteomes(proteomes)
+
+        query_seqs, query_times, query_info, query_tokens = [], [], [], []
+        for query_proteome in proteomes:
+            if skip_same_proteome and query_proteome == ref_proteome:
+                continue
+
+            time_val = get_distance(
+                ref_proteome, query_proteome, distances, self.config.time
+            )
+
+            proteome_tokens = tokens_by_proteome[query_proteome]
+            for k, (query_id, query_seq) in enumerate(proteomes[query_proteome]):
+                query_seqs.append(query_seq)
+                query_times.append(time_val)
+                query_info.append((query_id, query_proteome))
+                query_tokens.append(proteome_tokens[k])
+
+        return query_seqs, query_times, query_info, query_tokens
 
     def all_vs_all_proteomes(
         self,
@@ -221,32 +288,27 @@ class PeintHomologySearcher(HomologySearcher):
         total_refs = sum(len(seqs) for seqs in proteomes.values())
         pbar = tqdm(total=total_refs, desc="Processing references")
 
+        # Tokenize every proteome once up front rather than re-encoding the whole
+        # cross-proteome query set for each of the total_refs references.
+        tokens_by_proteome = self.tokenize_proteomes(proteomes)
+
         for ref_proteome in proteome_names:
+            # The query set and its times depend only on ref_proteome, so build
+            # them once here instead of rebuilding the full list for every
+            # reference sequence in this proteome. Order is unchanged.
+            query_seqs, query_times, query_info, query_tokens = self.build_query_set(
+                proteomes, ref_proteome, distances, skip_same_proteome, tokens_by_proteome
+            )
+
             for ref_id, ref_seq in proteomes[ref_proteome]:
-                # Collect all query sequences for this reference
-                query_seqs = []
-                query_times = []
-                query_info = []  # (query_id, query_proteome)
-
-                for query_proteome in proteome_names:
-                    if skip_same_proteome and query_proteome == ref_proteome:
-                        continue
-
-                    time_val = get_distance(
-                        ref_proteome, query_proteome, distances, self.config.time
-                    )
-
-                    for query_id, query_seq in proteomes[query_proteome]:
-                        query_seqs.append(query_seq)
-                        query_times.append(time_val)
-                        query_info.append((query_id, query_proteome))
-
                 if not query_seqs:
                     pbar.update(1)
                     continue
 
                 # Compare all queries against this reference
-                nlls = self._compare_sequences(ref_seq, query_seqs, query_times)
+                nlls = self._compare_sequences(
+                    ref_seq, query_seqs, query_times, query_tokens
+                )
 
                 for nll, time_val, (query_id, query_proteome) in zip(
                     nlls, query_times, query_info

@@ -285,3 +285,106 @@ def all_vs_all_sharded(
                 extra={"time": h["time"]},
             ))
     return hits
+
+
+def _proteomes_worker(
+    shard: List[Tuple[int, Any]],
+    device: torch.device,
+    rank: int,
+    *,
+    checkpoint: str,
+    proteomes: Dict[str, List[Tuple[str, str]]],
+    distances: Optional[Dict[Tuple[str, str], float]],
+    default_time: float,
+    skip_same_proteome: bool,
+    batch_size: int,
+    use_flash: bool,
+) -> List[Tuple[int, List[Dict[str, Any]]]]:
+    """Score one reference sequence per shard item, across proteomes."""
+    from protevo.homology_detection._peint import PeintHomologySearcher, PeintSearchConfig
+
+    searcher = PeintHomologySearcher(PeintSearchConfig(
+        checkpoint_path=checkpoint,
+        device=str(device),
+        time=default_time,
+        batch_size=batch_size,
+        use_flash=use_flash,
+    ))
+
+    tokens_by_proteome = searcher.tokenize_proteomes(proteomes)
+    # The query set depends only on the reference's proteome, so build it once per
+    # proteome even though this rank's shard interleaves proteomes.
+    query_sets: Dict[str, Any] = {}
+
+    out: List[Tuple[int, List[Dict[str, Any]]]] = []
+    for item_idx, (ref_proteome, ref_pos) in shard:
+        if ref_proteome not in query_sets:
+            query_sets[ref_proteome] = searcher.build_query_set(
+                proteomes, ref_proteome, distances, skip_same_proteome, tokens_by_proteome
+            )
+        query_seqs, query_times, query_info, query_tokens = query_sets[ref_proteome]
+
+        ref_id, ref_seq = proteomes[ref_proteome][ref_pos]
+        if not query_seqs:
+            out.append((item_idx, []))
+            continue
+
+        nlls = searcher._compare_sequences(ref_seq, query_seqs, query_times, query_tokens)
+        out.append((item_idx, [
+            {"query_id": qid, "db_id": ref_id, "score": float(nll),
+             "time": tval, "ref_proteome": ref_proteome, "query_proteome": qprot}
+            for nll, tval, (qid, qprot) in zip(nlls, query_times, query_info)
+        ]))
+    return out
+
+
+def all_vs_all_proteomes_sharded(
+    checkpoint: str,
+    proteomes: Dict[str, List[Tuple[str, str]]],
+    distances: Optional[Dict[Tuple[str, str], float]] = None,
+    skip_same_proteome: bool = True,
+    default_time: float = 1.0,
+    batch_size: int = 32,
+    num_gpus: Optional[int] = None,
+    use_flash: bool = True,
+) -> List:
+    """Cross-proteome all-vs-all, sharded over reference sequences.
+
+    This is what ``python -m protevo.homology_detection all-vs-all --proteome-dir``
+    runs, and it is O(total_refs x total_queries) decoder passes. Each reference is
+    independent, so the merged hit list matches the single-GPU result exactly.
+
+    Returns:
+        ``HomologyHit`` objects in the same order as
+        :meth:`PeintHomologySearcher.all_vs_all_proteomes`.
+    """
+    from protevo.homology_detection._base import HomologyHit
+
+    # Work items in the same order the serial implementation visits them, so the
+    # merged output ordering is identical.
+    items = [
+        (name, pos)
+        for name in proteomes
+        for pos in range(len(proteomes[name]))
+    ]
+
+    worker = partial(
+        _proteomes_worker,
+        checkpoint=checkpoint, proteomes=dict(proteomes), distances=distances,
+        default_time=default_time, skip_same_proteome=skip_same_proteome,
+        batch_size=batch_size, use_flash=use_flash,
+    )
+    per_ref = run_sharded(items, worker, num_gpus=num_gpus)
+
+    hits = []
+    for ref_hits in per_ref:
+        for h in ref_hits:
+            hits.append(HomologyHit(
+                query_id=h["query_id"], db_id=h["db_id"], score=h["score"],
+                extra={
+                    "time": h["time"],
+                    "ref_proteome": h["ref_proteome"],
+                    "query_proteome": h["query_proteome"],
+                },
+            ))
+    return hits

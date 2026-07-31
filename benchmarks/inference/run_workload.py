@@ -69,6 +69,8 @@ def main() -> None:
     ap.add_argument("--length-jitter", type=float, default=0.0,
                     help="Ragged-length fraction for the synthetic corpus")
     ap.add_argument("--corpus-seed", type=int, default=0)
+    ap.add_argument("--num-gpus", type=int, default=1,
+                    help="Shard the homology workload across N GPUs (optimized tree only)")
     ap.add_argument("--seed", type=int, default=0, help="Torch RNG seed")
     ap.add_argument("--warmup", type=int, default=2)
     ap.add_argument("--iters", type=int, default=5)
@@ -95,6 +97,7 @@ def main() -> None:
     meta = harness.env_metadata()
     meta.update({
         "repo": repo,
+        "num_gpus": args.num_gpus,
         "workload": args.workload,
         "mode": args.mode,
         "checkpoint": checkpoint,
@@ -192,7 +195,8 @@ def main() -> None:
         )
 
         if args.mode == "dump":
-            run, info = workloads.homology_callable(checkpoint, corpus, args.device, 32)
+            run, info = workloads.homology_callable(checkpoint, corpus, args.device, 32,
+                                                    num_gpus=args.num_gpus)
             hits = run()
             payload = sorted(
                 ({"query_id": h.query_id, "db_id": h.db_id, "score": float(h.score)}
@@ -205,7 +209,8 @@ def main() -> None:
             return
 
         for bs in batch_sizes:
-            run, info = workloads.homology_callable(checkpoint, corpus, args.device, bs)
+            run, info = workloads.homology_callable(checkpoint, corpus, args.device, bs,
+                                                    num_gpus=args.num_gpus)
             mem = harness.peak_memory(run, device)
             # All-vs-all is expensive; one timed pass is enough at large N.
             timing = harness.cuda_timeit(run, warmup=0, iters=max(1, args.iters // 3),

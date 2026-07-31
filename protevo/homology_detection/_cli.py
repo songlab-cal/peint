@@ -86,6 +86,16 @@ def add_peint_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Disable Flash Attention",
     )
+    parser.add_argument(
+        "--num-gpus",
+        type=int,
+        default=1,
+        help=(
+            "Shard the search across this many GPUs on this node (PEINT only; "
+            "default: 1). Use 0 for every visible GPU. Each reference sequence is "
+            "scored independently, so results are identical to a single-GPU run."
+        ),
+    )
 
 
 def add_diamond_args(parser: argparse.ArgumentParser) -> None:
@@ -171,16 +181,44 @@ def cmd_search(args):
     searcher.write_results(hits, args.output, format=get_output_format(args))
 
 
+def _sharded_gpus(args) -> int:
+    """Requested GPU count for the PEINT path, or 1 (serial) if not applicable."""
+    if args.method != "peint":
+        return 1
+    requested = getattr(args, "num_gpus", 1)
+    if requested == 0:
+        from protevo.inference import available_gpus
+
+        requested = max(available_gpus(), 1)
+    return max(1, requested)
+
+
 def cmd_all_vs_all(args):
     """Handle the all-vs-all subcommand."""
-    searcher = create_searcher(args)
+    num_gpus = _sharded_gpus(args)
+    # The sharded drivers load the checkpoint once per rank themselves, so do not
+    # build a searcher here when sharding - it would occupy GPU 0 for nothing.
+    searcher = None if num_gpus > 1 else create_searcher(args)
 
     if args.fasta:
         # Single FASTA mode
         sequences = load_fasta(args.fasta)
         logger.info(f"Loaded {len(sequences)} sequences")
 
-        hits = searcher.all_vs_all(sequences)
+        if num_gpus > 1:
+            from protevo.inference._runners import all_vs_all_sharded
+
+            logger.info(f"Sharding all-vs-all across {num_gpus} GPUs")
+            hits = all_vs_all_sharded(
+                checkpoint=args.checkpoint,
+                sequences=sequences,
+                time=args.time,
+                batch_size=args.batch_size,
+                num_gpus=num_gpus,
+                use_flash=not args.no_flash,
+            )
+        else:
+            hits = searcher.all_vs_all(sequences)
         logger.info(f"Found {len(hits)} hits")
 
     elif args.proteome_dir:
@@ -196,11 +234,26 @@ def cmd_all_vs_all(args):
 
         # PEINT supports additional options
         if args.method == "peint":
-            hits = searcher.all_vs_all_proteomes(
-                proteomes=proteomes,
-                distances=distances,
-                skip_same_proteome=not args.include_same_proteome,
-            )
+            if num_gpus > 1:
+                from protevo.inference._runners import all_vs_all_proteomes_sharded
+
+                logger.info(f"Sharding proteome all-vs-all across {num_gpus} GPUs")
+                hits = all_vs_all_proteomes_sharded(
+                    checkpoint=args.checkpoint,
+                    proteomes=proteomes,
+                    distances=distances,
+                    skip_same_proteome=not args.include_same_proteome,
+                    default_time=args.time,
+                    batch_size=args.batch_size,
+                    num_gpus=num_gpus,
+                    use_flash=not args.no_flash,
+                )
+            else:
+                hits = searcher.all_vs_all_proteomes(
+                    proteomes=proteomes,
+                    distances=distances,
+                    skip_same_proteome=not args.include_same_proteome,
+                )
         else:
             hits = searcher.all_vs_all_proteomes(proteomes=proteomes, distances=distances)
 
@@ -210,7 +263,9 @@ def cmd_all_vs_all(args):
         logger.error("Either --fasta or --proteome-dir is required")
         sys.exit(1)
 
-    searcher.write_results(hits, args.output, format=get_output_format(args))
+    from protevo.homology_detection._base import HomologySearcher
+
+    HomologySearcher.write_results(hits, args.output, format=get_output_format(args))
 
 
 def main():

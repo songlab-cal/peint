@@ -19,7 +19,7 @@ Attention Mask Convention:
 """
 
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Optional, Sequence
 
 import numpy as np
 import torch
@@ -38,6 +38,7 @@ from protevo.models._transformer_modules import (
     FFN_EXPANSION_FACTOR,
 )
 from protevo.models._config import PeintConfig
+from protevo.inference._tokenize import build_token_lut, encode_batch, pad_encoded
 
 from protevo.utils import amino_acids
 
@@ -158,8 +159,9 @@ class _PeintTransformerBase(nn.Module, ABC):
         # Inference-time lookups, built lazily and then reused across calls.
         # Plain attributes rather than buffers/submodules so state_dict is
         # unchanged and existing checkpoints keep loading.
-        self._inv_vocab = None   # token id -> token string, for decode_sequences
-        self._zero_idx = None    # non-amino-acid token ids banned during sampling
+        self._inv_vocab = None       # token id -> token string, for decode_sequences
+        self._zero_idx = None        # non-amino-acid token ids banned during sampling
+        self._token_lut_cache = None  # char -> token id table, see _token_lut
 
         # PEINT reads only the backbone's hidden representations (see
         # _compute_language_model_representations), never its LM-head logits, and
@@ -399,28 +401,23 @@ class _PeintTransformerBase(nn.Module, ABC):
         Returns:
             Tuple of (padded_inputs, padded_targets or None)
         """
-        encoded_inputs = []
-        encoded_targets = []
-        for seq in sequences:
-            encoded_core = self.vocab.encode(seq)
-            if targets:
-                encoded_inputs.append(torch.tensor([self.vocab.cls_idx] + encoded_core))
-                encoded_targets.append(torch.tensor(encoded_core + [self.vocab.eos_idx]))
-            else:
-                encoded_inputs.append(
-                    torch.tensor([self.vocab.cls_idx] + encoded_core + [self.vocab.eos_idx])
-                )
-
-        padded_inputs = nn.utils.rnn.pad_sequence(
-            encoded_inputs, batch_first=True, padding_value=self.vocab.padding_idx
+        return encode_batch(
+            sequences, self.vocab, lut=self._token_lut, targets=targets
         )
-        if targets:
-            padded_targets = nn.utils.rnn.pad_sequence(
-                encoded_targets, batch_first=True, padding_value=self.vocab.padding_idx
-            )
-            return padded_inputs, padded_targets
 
-        return padded_inputs, None
+    @property
+    def _token_lut(self):
+        """256-entry char -> token-id table, built once per model.
+
+        fair-esm's ``Alphabet.encode`` costs ~2 ms per sequence in pure Python;
+        homology search calls ``encode_sequences`` on the whole query set once per
+        reference, so that is O(N^2) tokenization on the critical path of an
+        all-vs-all run. The table reproduces ``encode`` exactly - see
+        ``protevo.inference._tokenize``.
+        """
+        if self._token_lut_cache is None:
+            self._token_lut_cache = build_token_lut(self.vocab)
+        return self._token_lut_cache
 
     def _likelihood_logits(
         self,
@@ -451,7 +448,8 @@ class _PeintTransformerBase(nn.Module, ABC):
         y: List[str],
         t: List[float],
         device: torch.device,
-        batch_size: int = 128
+        batch_size: int = 128,
+        y_tokens: Optional[Sequence[np.ndarray]] = None,
     ) -> np.ndarray:
         """Evaluate likelihood of target sequences given a source sequence.
 
@@ -465,23 +463,37 @@ class _PeintTransformerBase(nn.Module, ABC):
             t: List of evolutionary times (same length as y)
             device: Target device
             batch_size: Batch size for evaluation
+            y_tokens: Optional pre-tokenized targets (one array per entry in ``y``,
+                as returned by ``protevo.inference.encode_all``). Lets a caller that
+                scores the same corpus against many references — homology
+                all-vs-all — pay tokenization once instead of once per reference.
 
         Returns:
             Array of mean per-residue negative log-likelihoods (one per target)
         """
         assert len(t) == len(y), "Time and sequences must be the same length"
+        if y_tokens is not None:
+            assert len(y_tokens) == len(y), "y_tokens must align with y"
 
         likelihoods = []
         encoded_x, _ = self.encode_sequences([x])
+        # Uploaded once and then broadcast, rather than materializing B copies on
+        # the host and re-sending them for every batch.
+        encoded_x = encoded_x.to(device)
 
         for i in tqdm(range(0, len(y), batch_size)):
-            y_batch = y[i:i + batch_size]
-            y_encoded, y_targets = self.encode_sequences(y_batch, targets=True)
+            if y_tokens is not None:
+                y_encoded, y_targets = pad_encoded(
+                    y_tokens[i:i + batch_size], self.vocab, targets=True
+                )
+            else:
+                y_batch = y[i:i + batch_size]
+                y_encoded, y_targets = self.encode_sequences(y_batch, targets=True)
             y_encoded = y_encoded.to(device)
             y_targets = y_targets.to(device)
             y_attn_mask = y_encoded.eq(self.vocab.padding_idx)
 
-            x_encoded = encoded_x.repeat(y_encoded.size(0), 1).to(device)
+            x_encoded = encoded_x.expand(y_encoded.size(0), -1)
             x_attn_mask = x_encoded.eq(self.vocab.padding_idx)
 
             times = torch.tensor(t[i:i + batch_size]).unsqueeze(-1).to(device)

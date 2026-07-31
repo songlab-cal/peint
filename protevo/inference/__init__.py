@@ -16,6 +16,7 @@ from protevo.inference._tokenize import (
     encode_all,
     encode_batch,
     encode_one,
+    pad_encoded,
 )
 
 __all__ = [
@@ -25,6 +26,7 @@ __all__ = [
     "encode_batch",
     "encode_one",
     "item_seed",
+    "pad_encoded",
     "run_sharded",
     "shard_indices",
 ]

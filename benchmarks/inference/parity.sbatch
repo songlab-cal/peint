@@ -23,12 +23,17 @@ conda activate prot-evo
 
 export TORCH_HOME=/scratch/users/yufan.cao/torch_cache
 export HF_HOME=/scratch/users/yufan.cao/hf-cache
+# tqdm writes a progress bar per reference into the job log; useless in batch.
+export TQDM_DISABLE=1
 
 FAST_ROOT=/scratch/users/yufan.cao/peint-dev/rebuttal/peint-fast
 cd "$FAST_ROOT"
 
 TIER=${TIER:-1}
-WORKLOADS=${WORKLOADS:-logits,likelihood,generate}
+# Space-separated, converted to commas: sbatch --export splits its own argument
+# on commas, so a comma-separated WORKLOADS silently truncates to its first entry.
+WORKLOADS=${WORKLOADS:-"logits likelihood generate"}
+WORKLOADS=$(echo "$WORKLOADS" | tr ' ' ',')
 OUT=${OUT:-results/parity_tier${TIER}.json}
 
 echo "Host: $(hostname)  TIER: $TIER  WORKLOADS: $WORKLOADS"

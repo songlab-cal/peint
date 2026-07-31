@@ -93,10 +93,16 @@ class HomologySearcher(ABC):
         """
         pass
 
+    @staticmethod
     def write_results(
-        self, hits: List[HomologyHit], path: str, format: str = "csv"
+        hits: List[HomologyHit], path: str, format: str = "csv"
     ) -> None:
         """Write search results to file.
+
+        Pure serialization - it never touched ``self``, and making that explicit
+        lets the multi-GPU CLI path write results without constructing a searcher
+        (and so without loading a model onto GPU 0 for nothing). Existing
+        ``searcher.write_results(hits, path)`` calls are unaffected.
 
         Args:
             hits: List of HomologyHit objects

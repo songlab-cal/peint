@@ -156,12 +156,30 @@ def likelihood_callable(model, x_seq: str, targets: Sequence[str], t: float,
 # --------------------------------------------------------------------------
 
 def homology_callable(checkpoint: str, corpus: Sequence[Tuple[str, str]],
-                      device: str, batch_size: int, time: float = 0.5):
+                      device: str, batch_size: int, time: float = 0.5,
+                      num_gpus: int = 1):
     """Return a zero-argument callable running all-vs-all over ``corpus``.
 
-    Builds its own searcher because ``PeintHomologySearcher`` owns model loading
-    and the per-reference encoder cache.
+    With ``num_gpus == 1`` this drives ``PeintHomologySearcher.all_vs_all``
+    directly (the searcher owns model loading and the per-reference encoder
+    cache). With more, it drives the sharded runner, which loads the checkpoint
+    once per rank instead. Both are available on the baseline tree only in the
+    former form, so the sharded path is benchmarked against the optimized tree.
     """
+    seqs = list(corpus)
+    info = {"n_sequences": len(seqs), "batch_size": batch_size, "num_gpus": num_gpus}
+
+    if num_gpus > 1:
+        from protevo.inference._runners import all_vs_all_sharded
+
+        def _run():
+            return all_vs_all_sharded(
+                checkpoint=checkpoint, sequences=seqs, time=time,
+                batch_size=batch_size, num_gpus=num_gpus,
+            )
+
+        return _run, info
+
     from protevo.homology_detection._peint import PeintHomologySearcher, PeintSearchConfig
 
     config = PeintSearchConfig(
@@ -171,12 +189,11 @@ def homology_callable(checkpoint: str, corpus: Sequence[Tuple[str, str]],
         time=time,
     )
     searcher = PeintHomologySearcher(config)
-    seqs = list(corpus)
 
     def _run():
         return searcher.all_vs_all(seqs)
 
-    return _run, {"n_sequences": len(seqs), "batch_size": batch_size}
+    return _run, info
 
 
 def teacher_forced_logits(model, vocab, x_seq: str, y_seq: str, t: float, device):

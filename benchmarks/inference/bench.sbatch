@@ -32,6 +32,8 @@ conda activate prot-evo
 # Backbone weights come from scratch, never from a borrowed node's /tmp.
 export TORCH_HOME=/scratch/users/yufan.cao/torch_cache
 export HF_HOME=/scratch/users/yufan.cao/hf-cache
+# tqdm writes a progress bar per reference into the job log; useless in batch.
+export TQDM_DISABLE=1
 
 FAST_ROOT=/scratch/users/yufan.cao/peint-dev/rebuttal/peint-fast
 cd "$FAST_ROOT"
@@ -39,7 +41,11 @@ cd "$FAST_ROOT"
 REPO=${REPO:?set REPO (e.g. . or ../peint)}
 WORKLOAD=${WORKLOAD:?set WORKLOAD (generate|likelihood|homology|logits)}
 OUT=${OUT:?set OUT (output path prefix)}
-BATCH_SIZES=${BATCH_SIZES:-1,8,32,64}
+# Space-separated, converted to the comma form run_workload.py wants. sbatch
+# --export splits its own argument on commas, so a comma-separated BATCH_SIZES
+# silently truncates to its first element.
+BATCH_SIZES=${BATCH_SIZES:-"1 8 32 64"}
+BATCH_SIZES=$(echo "$BATCH_SIZES" | tr ' ' ',')
 EXTRA=${EXTRA:-}
 
 echo "Host: $(hostname)  REPO: $REPO  WORKLOAD: $WORKLOAD  OUT: $OUT"

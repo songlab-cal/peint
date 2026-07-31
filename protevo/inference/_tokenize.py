@@ -72,8 +72,26 @@ def encode_batch(
 ):
     """Tokenize and pad a batch of sequences.
 
-    Drop-in replacement for ``_PeintTransformerBase.encode_sequences``, producing
-    identical tensors:
+    Drop-in replacement for ``_PeintTransformerBase.encode_sequences``; see
+    :func:`pad_encoded` for the exact tensor layout.
+    """
+    if lut is None:
+        lut = build_token_lut(vocab)
+    return pad_encoded([encode_one(seq, lut) for seq in sequences], vocab,
+                       targets=targets, device=device)
+
+
+def pad_encoded(
+    encoded: Sequence[np.ndarray],
+    vocab,
+    targets: bool = False,
+    device: Optional[torch.device] = None,
+):
+    """Pad already-tokenized sequences into model-ready tensors.
+
+    Separated from tokenization so callers that score the same corpus many times
+    — homology all-vs-all being the extreme case — can tokenize once and pay only
+    the padding per batch.
 
     * ``targets=False``: inputs are ``[cls] + seq + [eos]``.
     * ``targets=True``: inputs are ``[cls] + seq``, targets are ``seq + [eos]``
@@ -85,14 +103,11 @@ def encode_batch(
     Returns:
         ``(padded_inputs, padded_targets_or_None)`` as int64 tensors.
     """
-    if lut is None:
-        lut = build_token_lut(vocab)
-
     cls_idx = vocab.cls_idx
     eos_idx = vocab.eos_idx
     pad_idx = vocab.padding_idx
 
-    encoded = [encode_one(seq, lut) for seq in sequences]
+    encoded = list(encoded)
     lengths = [len(e) for e in encoded]
     n = len(encoded)
 
