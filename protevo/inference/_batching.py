@@ -6,13 +6,21 @@ residues, that means most of a batch can be padding: a batch of 32 holding one
 900-residue sequence and 31 short ones costs 32 x 900 padded positions to score
 maybe 4000 real ones.
 
-Sorting by length before batching removes most of that. It is deliberately **not**
-the default, because it changes which sequences share a batch, and batch
-composition changes GEMM tiling and flash-attention accumulation order — so NLLs
-move in the last few significant figures, exactly as they already do today if you
-change ``batch_size``. That makes it a Tier-2 change under this branch's rules:
-available behind a flag, never silently on, and always reported with a measured
-deviation against the Tier-1 path.
+Sorting by length before batching removes most of that — but measured on this
+model it is barely worth doing, which is why it is off by default. On an A5000,
+cutting padding waste from 43% to 5% and the batch count from 64 to 21 sped up
+``evaluate_likelihood`` by 3%, and homology all-vs-all not at all. The attention
+path already unpads internally (``unpad_input`` + the varlen kernels), so it costs
+what the real tokens cost whatever shape the batch is; only the FFN, LayerNorms
+and LM head see padding. See ``benchmarks/inference/README.md`` for the numbers.
+
+It was also expected to perturb scores, since it changes which sequences share a
+batch. Measured, it does not: packed and unpacked results are bit-identical over
+512 likelihood targets and 1560 homology pairs. That follows from the same
+varlen property — a sequence's result does not depend on its batch-mates. Treat
+it as an observation on one GPU and one set of shapes rather than a guarantee
+(cuBLAS may split reductions differently as the batch dimension changes), which
+is why this stays behind a flag with a check attached.
 
 Ordering constraint worth knowing about: batches are emitted largest-first. The
 encoder K/V cache in ``EncoderCachedFlashMHCA`` is allocated on the first batch

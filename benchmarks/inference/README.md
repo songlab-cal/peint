@@ -140,6 +140,78 @@ per-reference encoder pass amortizes over more queries. A baseline run at N=400
 was not made, so the combined Tier-1 + 4-GPU figure against the original code is
 an extrapolation, not a measurement.
 
+## Tier 2: length bucketing (opt-in, off by default)
+
+**Read the measurement below before enabling this. It buys ~3–5% on likelihood
+and nothing on homology.** It is implemented, correct and tested, but it did not
+turn out to be worth much for this model.
+
+Fixed-size batching consumes queries in input order and pads to the batch
+maximum. `--pack-by-length` sorts by length and fills batches to a
+padded-position budget (`--max-tokens`, default 16384) rather than a row count,
+so short sequences pack more rows per batch.
+
+```bash
+python -m protevo.homology_detection all-vs-all \
+  --method peint --checkpoint model_checkpoints/peint.ckpt \
+  --proteome-dir <dir> --pack-by-length --max-tokens 16384 --output results.csv
+```
+
+```python
+model.evaluate_likelihood(x=ref, y=targets, t=times, device=device,
+                          pack_by_length=True, max_tokens=16384)
+```
+
+Results still come back in the order of `y`. **`batch_size` is ignored when
+packing** — `max_tokens` becomes what bounds a batch.
+
+### What it actually does to padding, and to wall time
+
+Synthetic corpus of 2048 sequences derived from the golden fixture, base length
+284, truncated by a jitter fraction. Padding figures are exact counts; timings
+are one A5000, `evaluate_likelihood`, 2048 targets.
+
+| corpus | lengths | fixed-32 batches / waste | packed batches / waste | unpacked | packed | speedup |
+|---|---|---|---|---|---|---|
+| jitter 0.5 | 142–283 | 64 / 23.8% | 28 / 1.2% | 1825.6 ms | 1744.2 ms | 1.05× |
+| jitter 0.9 | 28–283 | 64 / 43.3% | 21 / 4.7% | 1767.6 ms | 1722.6 ms | 1.03× |
+
+Homology all-vs-all, N=200 at jitter 0.5: 53.4 s both ways — no difference at all.
+
+So removing 43% of padded positions and cutting the batch count by two thirds
+bought 3%. The reason is that flash-attention already unpads internally, so the
+attention path costs what the *real* tokens cost no matter how the batch is
+shaped; only the FFN, LayerNorms and LM head see padding, and at these sizes
+(B≈32, L≈284, D=640 on an A5000) that is not what the clock is waiting on.
+
+The lesson is worth keeping: **do not assume a padding optimization helps a
+flash-attention model.** The first version of this was worse still — it capped
+rows at `batch_size`, so bucketing tidied each 32-row batch without reducing the
+batch count, and measured as exactly zero (1752 → 1756 ms; 53.1 → 53.6 s).
+
+### On bit-exactness
+
+This was expected to perturb NLLs in the last few significant figures, since it
+changes which sequences share a batch. **Measured, it does not**: packed vs
+unpacked is bit-identical — `max_abs_diff == 0.0` over 512 likelihood targets and
+1560 homology pairs, with identical ranking.
+
+That follows from the same property that limits the speedup: flash-attention's
+varlen path computes each sequence over its own `cu_seqlens` segment, so a
+sequence's result does not depend on its batch-mates, and the remaining GEMMs
+reduce over the feature dimension rather than the batch.
+
+Treat that as an observation on this GPU and these shapes, not a guarantee —
+cuBLAS can pick different split-K strategies as the batch dimension changes. The
+flag and the check stay because the property is empirical. Verify on your own
+corpus with:
+
+```bash
+python benchmarks/inference/parity.py --tier 2 \
+  --baseline-repo . --fast-repo . --fast-extra=--pack-by-length \
+  --length-jitter 0.5 --workloads likelihood,homology
+```
+
 ## What was slow, and why
 
 Measured on the release checkpoint; see the commit messages for the full list.

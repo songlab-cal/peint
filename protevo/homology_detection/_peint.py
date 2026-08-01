@@ -36,11 +36,11 @@ class PeintSearchConfig:
         time: Default evolutionary time for comparisons
         batch_size: Batch size for decoder evaluation
         use_flash: Whether to use Flash Attention
-        pack_by_length: Opt-in length-bucketed batching. Off by default because it
-            changes batch composition and so perturbs scores in the last few
-            significant figures (see protevo.inference._batching). Worth enabling
-            on proteomes, where sequence lengths vary widely and fixed-size batches
-            are mostly padding.
+        pack_by_length: Opt-in length-bucketed batching. Off by default: measured
+            on this model it gave no speedup for all-vs-all, because
+            flash-attention already unpads internally (see
+            protevo.inference._batching for the numbers). Kept because it is a
+            real win for other shapes and costs nothing when unused.
         max_tokens: Padded-position budget per batch when pack_by_length is set.
     """
 

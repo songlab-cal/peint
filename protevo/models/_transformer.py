@@ -477,11 +477,13 @@ class _PeintTransformerBase(nn.Module, ABC):
                 all-vs-all — pay tokenization once instead of once per reference.
             pack_by_length: Opt-in. Group targets of similar length instead of
                 consuming them in input order, so batches carry far less padding
-                and short sequences pack more rows per batch.
-                **Off by default and not bit-exact**: it changes which sequences
-                share a batch, which perturbs NLLs in the last few significant
-                figures exactly as changing ``batch_size`` already does. Results
-                are still returned in the order of ``y``.
+                and short sequences pack more rows per batch. Results are still
+                returned in the order of ``y``.
+                **Off by default, and worth measuring before you turn it on**: it
+                gained 3-5% on likelihood and nothing on homology, because
+                flash-attention already unpads internally. It was expected to
+                perturb scores but measured bit-identical; see
+                ``protevo.inference._batching``.
                 Note ``batch_size`` is ignored when this is set — ``max_tokens``
                 becomes the thing that bounds a batch.
             max_tokens: Padded-position budget per batch when ``pack_by_length`` is
