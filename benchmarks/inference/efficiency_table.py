@@ -96,7 +96,15 @@ def _problem_size(row):
 
 
 def _throughput(row):
-    """Pick the natural throughput figure for this workload, with its unit."""
+    """Pick the natural throughput figure for this workload, with its unit.
+
+    Samples per second is the objective for every one of these workloads, so it
+    wins wherever it exists. tok/s is reported alongside for generation but is a
+    derived quantity - at fixed sequence length the two are proportional, and at
+    varying length tok/s can rise while useful output falls.
+    """
+    if "seq_per_s" in row and row.get("workload") in ("generate", "generate_bulk"):
+        return row["seq_per_s"], "sequences/s"
     if "tok_per_s" in row:
         return row["tok_per_s"], "tokens/s"
     if "pairs_per_s" in row:
@@ -126,8 +134,14 @@ def build_rows(reports):
             "throughput": round(value, 1),
             "unit": unit,
             "peak_mem_mib": round(r.get("peak_reserved_mib", float("nan")), 0),
+            # Both are reported: sequences/s is the objective, tokens/s is what
+            # makes runs at different sequence lengths comparable.
+            "seq_per_s": round(r["seq_per_s"], 1) if "seq_per_s" in r else "",
+            "tok_per_s": round(r["tok_per_s"], 0) if "tok_per_s" in r else "",
+            "ms_per_step": round(r["ms_per_step"], 2) if "ms_per_step" in r else "",
         })
     rows.sort(key=lambda d: (d["workload"], d["size"] if d["size"] != "" else 0,
+                             d["gpu"],
                              d["batch_size"] if d["batch_size"] != "" else 0,
                              d["gpus"], d["tree"]))
     return rows
@@ -135,12 +149,14 @@ def build_rows(reports):
 
 def add_speedups(rows):
     """Annotate each optimized row with its speedup over the matching baseline."""
+    # The GPU model is part of the key: without it an A100 optimized row would be
+    # divided by an A5000 baseline and report a speedup that is mostly hardware.
     baseline = {
-        (r["workload"], r["size"], r["batch_size"], r["gpus"]): r
+        (r["workload"], r["size"], r["gpu"], r["batch_size"], r["gpus"]): r
         for r in rows if r["tree"] == "baseline"
     }
     for r in rows:
-        key = (r["workload"], r["size"], r["batch_size"], 1)
+        key = (r["workload"], r["size"], r["gpu"], r["batch_size"], 1)
         base = baseline.get(key)
         if base is None or r["tree"] == "baseline" or not base["wall_ms"]:
             r["speedup"] = ""
@@ -188,7 +204,8 @@ def main() -> None:
 
     rows = add_speedups(build_rows(reports))
     columns = ["workload", "size", "tree", "commit", "gpus", "gpu", "batch_size",
-               "wall_ms", "throughput", "unit", "peak_mem_mib", "speedup", "mem_ratio"]
+               "wall_ms", "seq_per_s", "tok_per_s", "ms_per_step", "peak_mem_mib",
+               "speedup", "mem_ratio"]
 
     metadata = {"n_reports": len(reports)}
     if args.checkpoint:

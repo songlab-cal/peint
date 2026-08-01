@@ -90,26 +90,36 @@ The per-rank figure is the single-GPU number for that rank's shard.
 
 ## Measured
 
-One RTX A5000, release `peint.ckpt`, ESM2-150M backbone. Full table:
-`results/efficiency.md` (regenerate with `efficiency_table.py`).
+Release `peint.ckpt`, ESM2-150M backbone, on three cards. Speedups are optimized
+vs baseline **on the same GPU**. Full table: `results/efficiency.md` (regenerate
+with `efficiency_table.py`).
 
-| workload | setting | baseline | optimized | speedup | peak mem |
-|---|---|---|---|---|---|
-| generation | batch 1, 568 decode steps | 3290 ms | 2365 ms | **1.39×** | 1048 → 1012 MiB |
-| generation | batch 8 | 3369 ms | 2453 ms | **1.37×** | 1392 → 1156 MiB |
-| generation | batch 32 | 3587 ms | 2485 ms | **1.44×** | 2866 → 1848 MiB |
-| generation | batch 64 | 3803 ms | 2652 ms | **1.43×** | 5516 → 2828 MiB (1.95×) |
-| likelihood / VEP | 2048 targets, batch 32 | 5444 ms | 1840 ms | **2.96×** | 2144 → 1744 MiB |
-| likelihood / VEP | 2048 targets, batch 128 | 5435 ms | 1931 ms | **2.81×** | 6066 → 4652 MiB |
-| homology all-vs-all | N=200 (39 800 pairs) | 129.5 s | 60.2 s | **2.15×** | 2144 → 1744 MiB |
+| workload | setting | A5000 | A100 | H200 |
+|---|---|---|---|---|
+| generation | batch 1 | 1.39× | 1.36× | 1.46× |
+| generation | batch 32 | 1.44× | 1.37× | 1.48× |
+| generation | batch 64 | 1.43× | 1.37× | **1.66×** |
+| likelihood / VEP | 2048 targets, bs 32 | 2.96× | 4.18× | 4.03× |
+| likelihood / VEP | 2048 targets, bs 128 | 2.81× | 4.53× | **6.95×** |
+| homology all-vs-all | N=200 (39 800 pairs) | 2.15× | 2.73× | **2.98×** |
 
-Generation throughput at batch 64 goes from 9 558 to 13 707 tokens/s while using
-roughly half the memory — which is itself a throughput lever, since it leaves
-room for a larger batch.
+Absolute, at the largest setting measured per workload:
 
-The likelihood and homology gains are mostly tokenization: 2048 sequences at
-fair-esm's ~2 ms/sequence is ~4 s of pure Python before any GPU work, which is
-almost exactly the 3.6 s that disappeared.
+| workload | GPU | baseline | optimized | peak mem |
+|---|---|---|---|---|
+| generation, batch 64 | H200 | 3227 ms (11 266 tok/s) | 1948 ms (**18 664 tok/s**) | 5540 → 2852 MiB |
+| likelihood, bs 128 | H200 | 3656 ms (560 seq/s) | 526 ms (**3 895 seq/s**) | 6090 → 4676 MiB |
+| homology, N=200 | H200 | 78.5 s (507 pairs/s) | 26.3 s (**1 514 pairs/s**) | 2168 → 1768 MiB |
+
+Generation uses roughly half the memory, which is itself a throughput lever since
+it leaves room for a larger batch.
+
+**The speedup grows with the GPU.** Likelihood at batch 128: 2.81× on A5000, 4.53×
+on A100, 6.95× on H200. The baseline barely moves across hardware (5435 → 3656 ms,
+1.49×) while the optimized path scales 3.67×, because the baseline was CPU-bound on
+Python tokenization — 2048 sequences at fair-esm's ~2 ms/sequence is ~4 s before
+any GPU work, almost exactly what disappeared. A faster card cannot help a workload
+waiting on the CPU; removing that is what lets the hardware matter.
 
 Correctness for every row above: `parity.py --tier 1` reports
 `max_abs_diff == 0.0` on logits, likelihood, generation and homology (the last
@@ -123,6 +133,33 @@ bit-identically as close as the pristine tree, on both precision paths:
 within that tolerance, because the fixture is fp32 and Flash runs bf16. That is
 pre-existing, but it means "reproduces y_logits.npy" is a claim about the Vanilla
 path only.
+
+### Throughput per unit compute (the number to plan with)
+
+Sweeping batch to each card's ceiling, source length 284:
+
+| GPU | tree | best batch | seq/s | tok/s | memory | M seq / GPU-hour | M seq / GPU-day |
+|---|---|---|---|---|---|---|---|
+| A100-40GB | baseline | 512 | 45.8 | 26 037 | 37.7 GB | 0.16 | 4.0 |
+| A100-40GB | optimized | 768 | **151.1** | 85 831 | 30.0 GB | **0.54** | **13.1** |
+| H200 | optimized | 3072 | **274.0** | 155 650 | 108.9 GB | **0.99** | **23.7** |
+
+On the A100 the baseline plateaus near 46 seq/s from batch 256 and **OOMs at
+1024** — it runs out of memory before headroom. At each card's best feasible
+batch that is **3.30x**, against 1.37x at fixed batch 64: on a 40 GB card the
+1.99x activation-memory reduction converts directly into throughput.
+
+Two practical notes: **do not set batch to the maximum that fits** (throughput is
+non-monotonic near capacity — A100 151 -> 132 seq/s from 768 to 1024, H200
+274 -> 267 from 3072 to 4096; aim for ~75-80% of what fits), and note the H200 is
+only 1.81x an A100 here despite ~3x the compute, because the A100 is memory-capped
+at batch 768 while the H200 runs 3072.
+
+**MFU is reported as a diagnostic, never as a target.** You can raise it by
+deleting the KV cache and recomputing attention — a metric improvable by useless
+work is not an objective. The measured picture (MFU ~0, HBM 1-3%) says the decode
+loop is *overhead-bound*, which is why batch size dominates. The objective is
+sequences/s; tok/s is reported alongside so runs at different lengths compare.
 
 ### Multi-GPU scaling
 

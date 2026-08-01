@@ -50,7 +50,7 @@ def main() -> None:
     ap.add_argument("--repo", required=True,
                     help="Repo root whose protevo/ package to benchmark (e.g. . or ../peint)")
     ap.add_argument("--workload", required=True,
-                    choices=["generate", "likelihood", "homology", "logits"])
+                    choices=["generate", "generate_bulk", "likelihood", "homology", "logits"])
     ap.add_argument("--mode", default="bench", choices=["bench", "dump"],
                     help="bench = timings; dump = deterministic outputs for parity")
     ap.add_argument("--checkpoint", default=None,
@@ -92,6 +92,9 @@ def main() -> None:
 
     torch.manual_seed(args.seed)
     device = torch.device(args.device)
+
+    # Calibrate the roofline on this exact card, once, before any model runs.
+    peak_tflops = harness.measure_peak_tflops(device) if args.device == "cuda" else float("nan")
     use_flash = not args.no_flash
     checkpoint = args.checkpoint or os.path.join(repo, "model_checkpoints", "peint.ckpt")
     if not os.path.exists(checkpoint):
@@ -102,6 +105,7 @@ def main() -> None:
     meta.update({
         "repo": repo,
         "num_gpus": args.num_gpus,
+        "measured_peak_bf16_tflops": peak_tflops,
         "pack_by_length": args.pack_by_length,
         "max_tokens": args.max_tokens,
         "workload": args.workload,
@@ -135,6 +139,8 @@ def main() -> None:
     # ------------------------------------------------------------- generate
     if args.workload == "generate":
         model, vocab = workloads.build_model(checkpoint, "generator", device, use_flash)
+        n_params = harness.count_params(model)["total_params"]
+        vendor = harness.VENDOR_PEAK.get(meta.get("gpu", ""), {})
         if args.mode == "dump":
             # p=0.0 selects argmax inside sampling_function -> fully deterministic.
             run, info = workloads.generation_callable(
@@ -152,8 +158,18 @@ def main() -> None:
                 model, vocab, x_seq, t, batch_size=bs, device=device,
                 max_decode_steps=args.decode_steps, p=1.0,
             )
-            mem = harness.peak_memory(run, device)
-            timing = harness.cuda_timeit(run, args.warmup, args.iters, device)
+            # A batch-ceiling sweep is *expected* to OOM at the top end. Record
+            # where, free the fragments, and keep going - otherwise one OOM
+            # discards every row already measured.
+            try:
+                mem = harness.peak_memory(run, device)
+                timing = harness.cuda_timeit(run, args.warmup, args.iters, device)
+            except torch.cuda.OutOfMemoryError:
+                print(f"[run_workload] generate bs={bs}: OOM - ceiling is below this")
+                rows.append(workloads.workload_metadata(
+                    "generate", {"batch_size": bs, "oom": True, **info}))
+                torch.cuda.empty_cache()
+                break
             steps = info["decode_steps"]
             row = workloads.workload_metadata("generate", {"batch_size": bs, **info})
             row.update(timing)
@@ -161,9 +177,52 @@ def main() -> None:
             row["seq_per_s"] = bs / (timing["mean_ms"] / 1e3)
             row["tok_per_s"] = bs * steps / (timing["mean_ms"] / 1e3)
             row["ms_per_step"] = timing["mean_ms"] / steps
+
+            secs = timing["mean_ms"] / 1e3
+            fl = harness.peint_generation_flops(bs, info["src_len"] + 2, steps)
+            row["total_tflops"] = fl["total_flops"] / 1e12
+            row["achieved_tflops"] = fl["total_flops"] / secs / 1e12
+            row["mfu"] = harness.mfu(fl["total_flops"], secs, peak_tflops)
+            row["decode_bw_util"] = harness.decode_bandwidth_utilization(
+                n_params, steps, secs, vendor.get("hbm_gbs", float("nan")))
             rows.append(row)
-            print(f"[run_workload] generate bs={bs}: {timing['mean_ms']:.1f} ms, "
-                  f"{row['tok_per_s']:.0f} tok/s, {mem['peak_reserved_mib']:.0f} MiB")
+            # samples/s leads: it is the objective. tok/s, MFU and HBM follow as
+            # diagnostics - MFU in particular is NOT a target (you can raise it by
+            # deleting the KV cache and doing more useless work), it only says
+            # whether the workload is compute-, bandwidth- or overhead-bound.
+            print(f"[run_workload] generate bs={bs}: {row['seq_per_s']:.1f} seq/s "
+                  f"| {timing['mean_ms']:.1f} ms, {row['ms_per_step']:.2f} ms/step, "
+                  f"{row['tok_per_s']:.0f} tok/s, {mem['peak_reserved_mib']:.0f} MiB, "
+                  f"MFU {row['mfu']*100:.1f}%, HBM {row['decode_bw_util']*100:.0f}%")
+
+    # --------------------------------------------------------- generate_bulk
+    elif args.workload == "generate_bulk":
+        corpus = workloads.make_corpus(
+            x_seq, args.n_sequences, seed=args.corpus_seed,
+            length_jitter=args.length_jitter,
+        )
+        srcs = [s for _, s in corpus]
+        times = [t] * len(srcs)
+
+        for bs in batch_sizes:
+            run, info = workloads.bulk_generation_callable(
+                checkpoint, srcs, times, batch_size=bs,
+                num_gpus=args.num_gpus, pack_by_length=args.pack_by_length,
+                use_flash=use_flash,
+            )
+            # Sharded ranks allocate in their own processes; one timed pass only,
+            # since each call pays process spawn plus a per-rank model load.
+            timing = harness.cuda_timeit(run, warmup=0, iters=1, device=device)
+            secs = timing["mean_ms"] / 1e3
+            row = workloads.workload_metadata("generate_bulk", info)
+            row.update(timing)
+            row["seq_per_s"] = len(srcs) / secs
+            row["tok_per_s"] = info["decode_steps_paid"] / secs
+            rows.append(row)
+            print(f"[run_workload] generate_bulk n={len(srcs)} bs={bs} "
+                  f"gpus={args.num_gpus} pack={args.pack_by_length}: "
+                  f"{secs:.1f} s, {row['seq_per_s']:.1f} seq/s, "
+                  f"decode-step waste {info['decode_step_waste']*100:.0f}%")
 
     # ----------------------------------------------------------- likelihood
     elif args.workload == "likelihood":

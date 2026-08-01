@@ -227,3 +227,53 @@ def workload_metadata(name: str, extra: Dict[str, object]) -> Dict[str, object]:
     row: Dict[str, object] = {"workload": name}
     row.update(extra)
     return row
+
+
+# --------------------------------------------------------------------------
+# Workload 4: bulk generation over many (x, t) pairs
+# --------------------------------------------------------------------------
+
+def bulk_generation_callable(checkpoint: str, sources: Sequence[str],
+                             times: Sequence[float], batch_size: int,
+                             num_gpus: int = 1, pack_by_length: bool = False,
+                             use_flash: bool = True, p: float = 1.0):
+    """Return a callable generating one sequence per ``(source, time)`` pair.
+
+    This is the shape that matters for bulk work and that the single-source
+    ``generation_callable`` cannot expose: real corpora have *heterogeneous source
+    lengths*, and generation cost is driven by ``2 * max(source length in batch)``
+    sequential decode steps with no early exit until every row finishes. Grouping
+    similar lengths is therefore attacking sequential work, not padded FLOPs.
+    """
+    from protevo.inference._batching import (
+        decode_step_waste,
+        fixed_size_batches,
+        length_sorted_batches,
+    )
+    from protevo.inference._runners import generate_sharded
+
+    srcs, ts = list(sources), list(times)
+    lengths = [len(s) for s in srcs]
+    groups = (length_sorted_batches(lengths, batch_size) if pack_by_length
+              else fixed_size_batches(len(srcs), batch_size))
+    waste = decode_step_waste(lengths, groups)
+
+    def _run():
+        return generate_sharded(
+            checkpoint=checkpoint, sources=srcs, times=ts,
+            batch_size=batch_size, num_gpus=num_gpus, p=p,
+            use_flash=use_flash, pack_by_length=pack_by_length,
+        )
+
+    info = {
+        "n_sequences": len(srcs),
+        "batch_size": batch_size,
+        "num_gpus": num_gpus,
+        "pack_by_length": pack_by_length,
+        "min_len": min(lengths),
+        "max_len": max(lengths),
+        "decode_steps_paid": waste["steps_paid"],
+        "decode_steps_needed": waste["steps_needed"],
+        "decode_step_waste": waste["waste_fraction"],
+    }
+    return _run, info

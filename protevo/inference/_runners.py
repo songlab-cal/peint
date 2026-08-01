@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import torch
 
+from protevo.inference._batching import fixed_size_batches, length_sorted_batches
 from protevo.inference._shard import item_seed, run_sharded
 
 logger = logging.getLogger(__name__)
@@ -77,10 +78,11 @@ def _generate_worker(
     )
     model = model.eval()
 
-    out: List[Tuple[int, List[str]]] = []
+    out: List[Tuple[int, List[Tuple[int, str]]]] = []
     for chunk_idx, batch in shard:
-        sources = [s for s, _ in batch]
-        times = [t for _, t in batch]
+        orig_idx = [i for i, _, _ in batch]
+        sources = [s for _, s, _ in batch]
+        times = [t for _, _, t in batch]
 
         # Seeded from the chunk's position in the original list, so the sampled
         # sequences are identical no matter which rank ran this chunk.
@@ -101,7 +103,7 @@ def _generate_worker(
                 x=x, t=t, max_decode_steps=steps, device=device,
                 temperature=temperature, p=p,
             )
-        out.append((chunk_idx, generated))
+        out.append((chunk_idx, list(zip(orig_idx, generated))))
     return out
 
 
@@ -117,6 +119,7 @@ def generate_sharded(
     use_flash: bool = True,
     base_seed: int = 0,
     autocast: bool = True,
+    pack_by_length: bool = False,
 ) -> List[str]:
     """Generate one evolved sequence per ``(source, time)`` pair, across all GPUs.
 
@@ -128,12 +131,34 @@ def generate_sharded(
             so changing it changes the sampled output (as it does today).
         num_gpus: Ranks to run. Defaults to every visible GPU.
         max_decode_steps: Defaults to twice the longest source *in each batch*.
+        pack_by_length: Opt-in. Group sources of similar length into a batch
+            instead of taking them in input order. Because a batch runs
+            ``2 * max(source length)`` steps and does not stop until every row has
+            emitted ``<eos>``, mixing lengths makes short sources pay for long
+            ones - so unlike the likelihood-side bucketing, this one attacks
+            sequential work rather than padded FLOPs. **Off by default and it
+            changes the sampled sequences**: batch composition determines which
+            RNG draws each source gets, so output differs (distributionally
+            identical, not element-wise). Results are still returned in the order
+            of ``sources``.
 
     Returns:
         Generated sequences, in the order of ``sources``.
     """
     assert len(sources) == len(times), "sources and times must be the same length"
-    batches = _chunk(list(zip(sources, times)), batch_size)
+
+    n = len(sources)
+    if n == 0:
+        return []
+
+    if pack_by_length:
+        groups = length_sorted_batches([len(s) for s in sources], batch_size)
+    else:
+        groups = fixed_size_batches(n, batch_size)
+
+    # Each item carries its original position, so the merge below is independent
+    # of how the work was grouped.
+    batches = [[(i, sources[i], times[i]) for i in g] for g in groups]
 
     worker = partial(
         _generate_worker,
@@ -142,7 +167,16 @@ def generate_sharded(
         base_seed=base_seed, autocast=autocast,
     )
     per_batch = run_sharded(batches, worker, num_gpus=num_gpus, base_seed=base_seed)
-    return [seq for batch in per_batch for seq in batch]
+
+    out: List[Optional[str]] = [None] * n
+    for batch in per_batch:
+        for orig_idx, seq in batch:
+            out[orig_idx] = seq
+    missing = [i for i, v in enumerate(out) if v is None]
+    if missing:
+        raise RuntimeError(f"{len(missing)} sources produced no sequence, "
+                           f"e.g. {missing[:5]}")
+    return out
 
 
 # --------------------------------------------------------------------------

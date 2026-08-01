@@ -8,20 +8,51 @@ Branch `inference-speedup`, worktree `rebuttal/peint-fast/`, branched from
 
 ## 1. Headline results
 
-One RTX A5000, release `peint.ckpt` (ESM2-150M frozen backbone + PEINT layers).
+Release `peint.ckpt` (ESM2-150M frozen backbone + PEINT layers), measured on
+three GPUs. Speedups are optimized vs baseline **on the same card**.
 
-| workload | setting | before | after | speedup | peak memory |
+| workload | setting | A5000 | A100 | H200 |
+|---|---|---|---|---|
+| generation | batch 1 | 1.39× | 1.36× | 1.46× |
+| generation | batch 8 | 1.37× | 1.31× | 1.44× |
+| generation | batch 32 | 1.44× | 1.37× | 1.48× |
+| generation | batch 64 | 1.43× | 1.37× | **1.66×** |
+| likelihood / VEP | 2048 targets, batch 32 | 2.96× | 4.18× | 4.03× |
+| likelihood / VEP | 2048 targets, batch 128 | 2.81× | 4.53× | **6.95×** |
+| homology all-vs-all | N=200, 39 800 pairs | 2.15× | 2.73× | **2.98×** |
+
+Absolute numbers per card:
+
+| workload | setting | GPU | before | after | peak memory |
 |---|---|---|---|---|---|
-| generation | batch 1 | 3290.5 ms | 2365.4 ms | **1.39×** | 1048 → 1012 MiB |
-| generation | batch 8 | 3369.2 ms | 2452.8 ms | **1.37×** | 1392 → 1156 MiB |
-| generation | batch 32 | 3587.1 ms | 2484.6 ms | **1.44×** | 2866 → 1848 MiB |
-| generation | batch 64 | 3803.4 ms | 2652.2 ms | **1.43×** | 5516 → 2828 MiB (**1.95×**) |
-| likelihood / VEP | 2048 targets, batch 32 | 5443.7 ms | 1839.7 ms | **2.96×** | 2144 → 1744 MiB |
-| likelihood / VEP | 2048 targets, batch 128 | 5434.6 ms | 1931.1 ms | **2.81×** | 6066 → 4652 MiB |
-| homology all-vs-all | N=200, 39 800 pairs | 129.5 s | 60.2 s | **2.15×** | 2144 → 1744 MiB |
+| generation | batch 64 | A5000 | 3803.4 ms | 2652.2 ms | 5516 → 2828 MiB (**1.95×**) |
+| generation | batch 64 | A100 | 3670.6 ms | 2684.0 ms | 5516 → 2828 MiB |
+| generation | batch 64 | H200 | 3226.7 ms | 1947.7 ms | 5540 → 2852 MiB |
+| likelihood | 2048 tgt, bs 128 | A5000 | 5434.6 ms | 1931.1 ms | 6066 → 4652 MiB |
+| likelihood | 2048 tgt, bs 128 | A100 | 4988.9 ms | 1101.6 ms | 6066 → 4652 MiB |
+| likelihood | 2048 tgt, bs 128 | H200 | 3655.6 ms | 525.8 ms | 6090 → 4676 MiB |
+| homology | N=200 | A5000 | 129.5 s | 60.2 s | 2144 → 1744 MiB |
+| homology | N=200 | A100 | 111.0 s | 40.7 s | 2144 → 1744 MiB |
+| homology | N=200 | H200 | 78.5 s | 26.3 s | 2168 → 1768 MiB |
 
-Generation at batch 64: **9 558 → 13 707 tokens/s** on roughly half the memory.
-Likelihood at batch 32: **376 → 1 113 sequences/s**.
+Generation throughput at batch 64: **9 558 → 13 707 tok/s** (A5000),
+**9 904 → 13 544** (A100), **11 266 → 18 664** (H200) — on roughly half the memory.
+
+### The speedup grows with GPU speed
+
+Likelihood at batch 128, same workload on all three cards:
+
+| GPU | baseline | optimized | speedup |
+|---|---|---|---|
+| A5000 | 5434.6 ms | 1931.1 ms | 2.81× |
+| A100 | 4988.9 ms | 1101.6 ms | 4.53× |
+| H200 | 3655.6 ms | 525.8 ms | **6.95×** |
+
+The baseline barely moves across hardware (5435 → 3656 ms, only 1.49× from A5000
+to H200) while the optimized path scales 3.67×. That is direct confirmation of the
+diagnosis in §3: the baseline was **CPU-bound on Python tokenization**, so a faster
+GPU could not help it. Removing that bottleneck is what lets the hardware matter —
+and it means the win is largest on exactly the cards you would deploy on.
 
 Multi-GPU, all-vs-all at N=400 (159 600 pairs), 4× A5000:
 
@@ -262,30 +293,46 @@ See §5.
 
 ### Generation — `PeintGenerator.generate`, source length 284, 568 decode steps
 
-| batch | baseline ms | optimized ms | speedup | baseline tok/s | optimized tok/s | baseline MiB | optimized MiB |
-|---|---|---|---|---|---|---|---|
-| 1 | 3290.5 | 2365.4 | 1.39× | 173 | 240 | 1048 | 1012 |
-| 8 | 3369.2 | 2452.8 | 1.37× | 1349 | 1853 | 1392 | 1156 |
-| 32 | 3587.1 | 2484.6 | 1.44× | 5067 | 7316 | 2866 | 1848 |
-| 64 | 3803.4 | 2652.2 | 1.43× | 9558 | 13707 | 5516 | 2828 |
+| GPU | batch | baseline ms | optimized ms | speedup | baseline tok/s | optimized tok/s | baseline MiB | optimized MiB |
+|---|---|---|---|---|---|---|---|---|
+| A5000 | 1 | 3290.5 | 2365.4 | 1.39× | 173 | 240 | 1048 | 1012 |
+| A5000 | 8 | 3369.2 | 2452.8 | 1.37× | 1349 | 1853 | 1392 | 1156 |
+| A5000 | 32 | 3587.1 | 2484.6 | 1.44× | 5067 | 7316 | 2866 | 1848 |
+| A5000 | 64 | 3803.4 | 2652.2 | 1.43× | 9558 | 13707 | 5516 | 2828 |
+| A100 | 1 | 3203.8 | 2352.0 | 1.36× | 177 | 241 | 1048 | 1012 |
+| A100 | 8 | 3326.3 | 2534.2 | 1.31× | 1366 | 1793 | 1392 | 1156 |
+| A100 | 32 | 3529.0 | 2576.8 | 1.37× | 5151 | 7054 | 2866 | 1848 |
+| A100 | 64 | 3670.6 | 2684.0 | 1.37× | 9904 | 13544 | 5516 | 2828 |
+| H200 | 1 | 2459.6 | 1688.5 | 1.46× | 231 | 336 | 1060 | 1024 |
+| H200 | 8 | 2576.6 | 1793.8 | 1.44× | 1764 | 2533 | 1416 | 1180 |
+| H200 | 32 | 2726.5 | 1836.9 | 1.48× | 6666 | 9895 | 2890 | 1872 |
+| H200 | 64 | 3226.7 | 1947.7 | 1.66× | 11266 | 18664 | 5540 | 2852 |
 
 ### Likelihood / VEP — `evaluate_likelihood`, 2048 targets
 
-| batch | baseline ms | optimized ms | speedup | baseline seq/s | optimized seq/s | baseline MiB | optimized MiB |
-|---|---|---|---|---|---|---|---|
-| 32 | 5443.7 | 1839.7 | 2.96× | 376 | 1113 | 2144 | 1744 |
-| 128 | 5434.6 | 1931.1 | 2.81× | 377 | 1061 | 6066 | 4652 |
+| GPU | batch | baseline ms | optimized ms | speedup | baseline seq/s | optimized seq/s | baseline MiB | optimized MiB |
+|---|---|---|---|---|---|---|---|---|
+| A5000 | 32 | 5443.7 | 1839.7 | 2.96× | 376 | 1113 | 2144 | 1744 |
+| A5000 | 128 | 5434.6 | 1931.1 | 2.81× | 377 | 1061 | 6066 | 4652 |
+| A100 | 32 | 5296.0 | 1267.6 | 4.18× | 387 | 1616 | 2144 | 1744 |
+| A100 | 128 | 4988.9 | 1101.6 | 4.53× | 411 | 1859 | 6066 | 4652 |
+| H200 | 32 | 3500.2 | 867.5 | 4.03× | 585 | 2361 | 2168 | 1768 |
+| H200 | 128 | 3655.6 | 525.8 | 6.95× | 560 | 3895 | 6090 | 4676 |
 
 ### Homology all-vs-all
 
 | N | pairs | config | wall | pairs/s | speedup |
 |---|---|---|---|---|---|
-| 200 | 39 800 | baseline, 1 GPU | 129.5 s | 307 | — |
-| 200 | 39 800 | optimized, 1 GPU | 60.2 s | 661 | 2.15× |
-| 400 | 159 600 | optimized, 1 GPU | 184.6 s | 864 | — |
-| 400 | 159 600 | optimized, 4 GPU | 72.9 s | 2 190 | 2.53× vs 1 GPU |
-| 120 | 14 280 | optimized, 1 GPU | 27.7 s | 515 | — |
-| 120 | 14 280 | optimized, 4 GPU | 37.8 s | 378 | **0.73× — slower** |
+| 200 | 39 800 | A5000 baseline, 1 GPU | 129.5 s | 307 | — |
+| 200 | 39 800 | A5000 optimized, 1 GPU | 60.2 s | 661 | 2.15× |
+| 200 | 39 800 | A100 baseline, 1 GPU | 111.0 s | 358 | — |
+| 200 | 39 800 | A100 optimized, 1 GPU | 40.7 s | 977 | 2.73× |
+| 200 | 39 800 | H200 baseline, 1 GPU | 78.5 s | 507 | — |
+| 200 | 39 800 | H200 optimized, 1 GPU | 26.3 s | 1 514 | 2.98× |
+| 400 | 159 600 | A5000 optimized, 1 GPU | 184.6 s | 864 | — |
+| 400 | 159 600 | A5000 optimized, 4 GPU | 72.9 s | 2 190 | 2.53× vs 1 GPU |
+| 120 | 14 280 | A5000 optimized, 1 GPU | 27.7 s | 515 | — |
+| 120 | 14 280 | A5000 optimized, 4 GPU | 37.8 s | 378 | **0.73× — slower** |
 
 Two things not to misread. Single-GPU throughput rises with N (864 pairs/s at
 N=400 vs 661 at N=200) because the per-reference encoder pass amortizes over more
@@ -355,6 +402,82 @@ that field to the test's ignore set. Unrelated to inference; inherited, not caus
 
 ---
 
+### Batch size is the dominant throughput lever, and memory is what caps it
+
+Everything above holds batch size fixed, which understates what the optimizations
+buy in production. Sweeping batch to each card's ceiling (source length 284, one
+timed pass per point):
+
+**A100-PCIE-40GB**
+
+| batch | baseline seq/s | baseline mem | optimized seq/s | optimized mem |
+|---|---|---|---|---|
+| 64 | 17.9 | 4.0 GB | 22.8 | 2.5 GB |
+| 128 | 28.8 | 9.2 GB | 46.5 | 5.0 GB |
+| 256 | 45.0 | 19.5 GB | 75.8 | 9.8 GB |
+| 512 | 45.8 | 37.7 GB | 105.3 | 19.6 GB |
+| 768 | 45.6 | 38.8 GB | **151.1** | 30.0 GB |
+| 1024 | **OOM** | — | 132.2 | 38.3 GB |
+
+The baseline plateaus around 46 seq/s from batch 256 and then OOMs: it runs out of
+memory before it runs out of headroom. **At each card's best feasible batch,
+45.8 -> 151.1 seq/s = 3.30x** — 2.4x more than the 1.37x measured at fixed batch
+64. On a memory-constrained card the 1.99x activation-memory reduction (matched at
+batch 256: 19 980 -> 10 062 MiB) converts directly into throughput, because batch
+size is the lever and memory is the cap.
+
+**H200** peaks at batch 3072 with **274.0 seq/s** (155 650 tok/s, 108.9 GB).
+
+### Throughput per unit compute
+
+| GPU | tree | best batch | seq/s | tok/s | memory | M seq / GPU-hour | M seq / GPU-day |
+|---|---|---|---|---|---|---|---|
+| A100-40GB | baseline | 512 | 45.8 | 26 037 | 37.7 GB | 0.16 | 4.0 |
+| A100-40GB | optimized | 768 | 151.1 | 85 831 | 30.0 GB | 0.54 | 13.1 |
+| H200 | optimized | 3072 | 274.0 | 155 650 | 108.9 GB | 0.99 | 23.7 |
+
+Scales roughly linearly with sequence length (cost is ~2 x source length decode
+steps), so treat these as figures for ~284-residue proteins.
+
+Two practical notes:
+
+* **Do not set batch to the maximum that fits.** Throughput is non-monotonic near
+  capacity — A100 drops 151 -> 132 seq/s from batch 768 to 1024, H200 drops
+  274 -> 267 from 3072 to 4096. Allocator pressure. Best batch is around 75-80% of
+  what fits.
+* **H200 is only 1.81x an A100 here despite roughly 3x the compute**, because the
+  A100 is capped at batch 768 by memory while the H200 runs 3072. For bulk
+  generation on A100s, memory is the binding constraint and anything that shrinks
+  the activation footprint buys throughput close to one-for-one.
+
+### On MFU as a target: it is not one
+
+Measured on H200 with a calibrated ceiling (809.5 TFLOP/s achieved on a large bf16
+GEMM, 82% of the 989 spec figure):
+
+| batch | ms/step | seq/s | MFU | HBM util |
+|---|---|---|---|---|
+| 1 | 3.06 | 0.6 | 0.0% | 3% |
+| 64 | 3.49 | 32.3 | 0.6% | 2% |
+| 1024 | 7.56 | 238 | 4.1% | 1% |
+
+Low MFU here does **not** mean 25x is available. MFU is not monotone with
+throughput: deleting the KV cache would raise it sharply by burning FLOPs on
+recomputation while making generation slower. Any metric improvable by doing
+useless work cannot be an objective. It is a reasonable proxy for training
+(compute-bound, FLOPs fixed by model x data); autoregressive decode is inherently
+low arithmetic intensity, so even an optimal decoder scores low.
+
+What the table legitimately shows is a *diagnosis*: neither compute-bound (MFU
+~0) nor bandwidth-bound (HBM 1-3%), therefore **overhead-bound**. The `ms/step`
+column says the same thing more directly — 1024x the work for 2.5x the time, so
+per-step cost is nearly all fixed overhead. That is why batch size dominates, and
+why CUDA graphs would mostly help *latency* rather than throughput.
+
+**The objective is sequences per second at fixed output quality.** Both seq/s and
+tok/s are reported: seq/s is the goal, tok/s makes runs at different sequence
+lengths comparable.
+
 ## 5. Predictions the measurements disproved
 
 Recorded because they are the useful part.
@@ -375,6 +498,19 @@ result does not depend on its batch-mates, and the remaining GEMMs reduce over t
 feature dimension rather than the batch. Recorded as an observation on one GPU and
 one set of shapes, not a guarantee — cuBLAS can split reductions differently as
 the batch dimension changes — which is why the flag and the check remain.
+
+**Length binning for generation helps far less than the step count implies.** I
+predicted 1.7-1.8x on a ragged corpus by counting decode steps. Measured on 512
+sequences of length 28-283: decode-step waste falls 43% -> 9% exactly as
+predicted, but wall time moves only 35.2 -> 32.9 s (**1.07x**). The measurement is
+also confounded — `_generate_worker` loads the checkpoint *inside* the worker, so
+every timed call carries a full ESM2-150M build (~15 s of the ~33 s). Backing that
+out gives roughly 1.13x, still nowhere near the prediction. The likely reason is
+that `decode_step_waste` assumes each batch runs the full `2 x max`, which the
+loop's early exit on `eos_reached.all()` makes false. Treat the binning number as
+unresolved: the flag is implemented, correct and off by default, but it should not
+be advertised as a throughput win until measured with the load excluded and the
+*actual* executed steps instrumented.
 
 **A dtype hazard that wasn't one.** Replacing `t[i:i+bs]` with `[t[j] for j in
 idxs]` looked like it would change `torch.tensor`'s inferred dtype for numpy
@@ -404,5 +540,10 @@ is now a comment so nobody re-derives it.
   over inputs that never change — structurally the largest remaining redundancy in
   the package, but out of scope here (it is not one of the three shipping
   workloads).
-- **A100 / H200 numbers.** Everything above is A5000. The relative wins should
-  hold, but the memory head-room and the sharding crossover will differ.
+- **Batch-ceiling and throughput-per-compute measured on A100-40GB and H200
+  only.** A5000 was swept to batch 64 only, so its ceiling is unknown.
+- **Multi-GPU scaling measured on A5000 only.** The single-GPU numbers now cover
+  A5000, A100 and H200, but the sharding study (§4) is A5000. The ~15 s per-rank
+  model load is largely CPU-side, so the crossover point should be similar; the
+  compute half of the trade shrinks on faster cards, which would push the
+  crossover to *larger* work lists, not smaller.

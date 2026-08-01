@@ -27,6 +27,11 @@ export TORCH_HOME=/scratch/users/yufan.cao/torch_cache
 export HF_HOME=/scratch/users/yufan.cao/hf-cache
 # tqdm writes a progress bar per reference into the job log; useless in batch.
 export TQDM_DISABLE=1
+# Shared A100/H200 nodes have filled their local /tmp and killed runs on ENOSPC.
+# Keep torch/wandb scratch on the parallel filesystem.
+export TMPDIR=${TMPDIR:-/scratch/users/yufan.cao/tmp}
+export XDG_CACHE_HOME=${XDG_CACHE_HOME:-/scratch/users/yufan.cao/.cache}
+mkdir -p "$TMPDIR" "$XDG_CACHE_HOME"
 
 FAST_ROOT=/scratch/users/yufan.cao/peint-dev/rebuttal/peint-fast
 cd "$FAST_ROOT"

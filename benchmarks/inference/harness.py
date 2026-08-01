@@ -211,3 +211,115 @@ def save_report(
         json.dump({"metadata": metadata or {}, "rows": list(rows)}, fh, indent=2)
 
     print(f"[harness] wrote {out_prefix}.{{csv,md,json}}")
+
+
+# --------------------------------------------------------------------------
+# Model FLOPs Utilization
+# --------------------------------------------------------------------------
+
+# Vendor peak dense bf16 tensor-core throughput (TFLOP/s) and HBM bandwidth
+# (GB/s). Sparsity-doubled marketing numbers are deliberately NOT used. These are
+# a cross-check only; `measure_peak_tflops` below is the number MFU is reported
+# against, because it is what this machine actually reaches.
+VENDOR_PEAK = {
+    "NVIDIA RTX A5000": {"bf16_tflops": 54.2, "hbm_gbs": 768.0},
+    "NVIDIA A100-SXM4-80GB": {"bf16_tflops": 312.0, "hbm_gbs": 2039.0},
+    "NVIDIA A100-SXM4-40GB": {"bf16_tflops": 312.0, "hbm_gbs": 1555.0},
+    "NVIDIA A100 80GB PCIe": {"bf16_tflops": 312.0, "hbm_gbs": 1935.0},
+    "NVIDIA A100-PCIE-40GB": {"bf16_tflops": 312.0, "hbm_gbs": 1555.0},
+    "NVIDIA H200": {"bf16_tflops": 989.0, "hbm_gbs": 4800.0},
+}
+
+
+def measure_peak_tflops(device=None, dtype=torch.bfloat16, n: int = 8192,
+                        iters: int = 20) -> float:
+    """Achievable dense bf16 GEMM throughput on this device, in TFLOP/s.
+
+    MFU against a vendor headline number flatters or punishes a kernel for
+    reasons that have nothing to do with the model. Calibrating against a large
+    square matmul measured on the same card gives a ceiling the workload could
+    actually have reached.
+    """
+    if not torch.cuda.is_available():
+        return float("nan")
+    a = torch.randn(n, n, device=device, dtype=dtype)
+    b = torch.randn(n, n, device=device, dtype=dtype)
+    for _ in range(3):
+        a @ b
+    torch.cuda.synchronize(device)
+    start, end = torch.cuda.Event(True), torch.cuda.Event(True)
+    start.record()
+    for _ in range(iters):
+        a @ b
+    end.record()
+    torch.cuda.synchronize(device)
+    seconds = start.elapsed_time(end) / 1e3
+    # 2 FLOPs per multiply-add.
+    return (2.0 * n ** 3 * iters) / seconds / 1e12
+
+
+def transformer_flops(n_layers: int, d_model: int, n_tokens: int,
+                      ctx_len: int = 0, ffn_factor: int = 4,
+                      cross_ctx_len: int = 0) -> float:
+    """Forward FLOPs for ``n_tokens`` through ``n_layers`` transformer layers.
+
+    Counts the two things that dominate:
+
+    * **projections and FFN** - 2 FLOPs per MAC, per token:
+      qkv+out = 4 d^2, FFN = 2 * ffn_factor * d^2, so 2 * (4 + 2f) d^2 per token.
+    * **attention scores and values** - 2 * 2 * d * ctx per token (QK^T then PV),
+      using ``ctx_len`` as the average context each token attends over. Add
+      ``cross_ctx_len`` for a cross-attention sublayer (its own out/kv projections
+      are folded into the 4 d^2 term as an approximation).
+
+    LayerNorms, activations and the rotary embedding are omitted: they are O(d)
+    per token against O(d^2), well under a percent here. This is an analytic
+    count, not a profiler measurement - it answers "how far from the roofline",
+    not "where did every cycle go".
+    """
+    per_token_dense = 2.0 * (4 + 2 * ffn_factor) * d_model ** 2
+    per_token_attn = 4.0 * d_model * (ctx_len + cross_ctx_len)
+    return n_layers * n_tokens * (per_token_dense + per_token_attn)
+
+
+def peint_generation_flops(batch: int, src_len: int, steps: int,
+                           d_model: int = 640, n_enc_backbone: int = 30,
+                           n_enc_peint: int = 5, n_dec: int = 5,
+                           vocab: int = 33) -> Dict[str, float]:
+    """Analytic forward FLOPs for one batched ``PeintGenerator.generate`` call.
+
+    Split into the prefill (frozen ESM2 backbone + PEINT encoder stack, run once
+    over the source) and the decode loop (``steps`` single-token passes through
+    the decoder, cross-attending to the source and self-attending to a prefix that
+    grows to ``steps``).
+    """
+    prefill = transformer_flops(n_enc_backbone + n_enc_peint, d_model,
+                                n_tokens=batch * src_len, ctx_len=src_len)
+    # Self-attention context averages steps/2 over the run.
+    decode = transformer_flops(n_dec, d_model, n_tokens=batch * steps,
+                               ctx_len=steps / 2.0, cross_ctx_len=src_len)
+    lm_head = 2.0 * batch * steps * d_model * vocab
+    return {"prefill_flops": prefill, "decode_flops": decode + lm_head,
+            "total_flops": prefill + decode + lm_head}
+
+
+def mfu(total_flops: float, seconds: float, peak_tflops: float) -> float:
+    """Model FLOPs Utilization: achieved / peak, as a fraction."""
+    if not seconds or not peak_tflops or peak_tflops != peak_tflops:
+        return float("nan")
+    return (total_flops / seconds / 1e12) / peak_tflops
+
+
+def decode_bandwidth_utilization(n_params: int, steps: int, seconds: float,
+                                 peak_gbs: float, bytes_per_param: int = 2) -> float:
+    """Fraction of HBM bandwidth used re-reading weights during decode.
+
+    Autoregressive decode at modest batch is weight-bound, not FLOP-bound: every
+    step streams the whole parameter set through the SMs regardless of batch size,
+    so MFU can look terrible while the card is in fact saturated. This is the
+    metric that tells the two apart.
+    """
+    if not seconds or not peak_gbs:
+        return float("nan")
+    moved_gb = n_params * bytes_per_param * steps / 1e9
+    return (moved_gb / seconds) / peak_gbs

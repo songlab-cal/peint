@@ -109,6 +109,43 @@ def largest_batch_first(batches: List[List[int]]) -> List[List[int]]:
     return sorted(batches, key=lambda b: -len(b))
 
 
+def length_sorted_batches(lengths: Sequence[int], batch_size: int) -> List[List[int]]:
+    """Fixed-width batches of similar-length items, shortest first.
+
+    Used by generation, where the cost driver is different from likelihood. There
+    the waste was padded positions, which flash-attention largely skips; here it is
+    *sequential decode steps*, and nothing skips those:
+
+    * ``max_decode_steps`` defaults to twice the longest source in the batch, and
+    * the loop runs until every row has emitted ``<eos>``,
+
+    so one 900-residue source makes a batch of 50-residue sources run 1800 steps
+    each. Grouping similar lengths cuts that directly. Batch width stays fixed
+    because generation memory scales with rows x steps, not with a token budget.
+    """
+    order = sorted(range(len(lengths)), key=lambda i: (lengths[i], i))
+    return [order[i:i + batch_size] for i in range(0, len(order), batch_size)]
+
+
+def decode_step_waste(lengths: Sequence[int], batches: Sequence[Sequence[int]],
+                      steps_per_residue: int = 2) -> dict:
+    """Decode steps actually run vs the minimum each sequence needed.
+
+    A batch runs ``steps_per_residue * max(length in batch)`` steps for every row,
+    so a row needing fewer pays the difference. This is the generation analogue of
+    :func:`padding_waste`, and unlike padded positions it is real sequential work.
+    """
+    needed = sum(steps_per_residue * L for L in lengths)
+    paid = sum(len(b) * steps_per_residue * max(lengths[i] for i in b)
+               for b in batches if b)
+    return {
+        "steps_needed": needed,
+        "steps_paid": paid,
+        "waste_fraction": (paid - needed) / paid if paid else 0.0,
+        "n_batches": len(batches),
+    }
+
+
 def padding_waste(lengths: Sequence[int], batches: Sequence[Sequence[int]]) -> dict:
     """Padded vs real positions for a batching, for reporting the win.
 
