@@ -526,7 +526,11 @@ def setup_args():
         "--num_warmup_steps", type=int, default=2000, help="Number of warmup steps"
     )
     parser.add_argument(
-        "--devices", type=int, nargs="+", default=None, help="GPU devices to use"
+        "--devices",
+        type=int,
+        nargs="+",
+        default=None,
+        help="GPU device ids to use; omit to auto-select all available GPUs",
     )
     parser.add_argument(
         "--max_steps", type=int, default=-1, help="Maximum number of steps to train for"
@@ -702,7 +706,13 @@ def validate_args(args):
     """
     Validate command line arguments.
     """
-    if args.seed is None and (args.devices is not None and len(args.devices) > 1):
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "Training requires a CUDA GPU, but torch.cuda.is_available() is False."
+        )
+
+    multi_gpu = isinstance(args.devices, (list, tuple)) and len(args.devices) > 1
+    if args.seed is None and multi_gpu:
         raise ValueError("Must set seed when using multiple GPUs")
 
     if args.label_smoothing > 0.0 and args.rate_matrix_path is None:
@@ -856,12 +866,13 @@ def setup_trainer(args, logger, callbacks):
     import lightning as pl
 
     strategy = "ddp" if torch.cuda.device_count() > 1 else "auto"
+    devices = args.devices if args.devices is not None else "auto"
     trainer = pl.Trainer(
         strategy=strategy,
         logger=logger,
         callbacks=callbacks,
         accelerator="gpu",
-        devices=args.devices,
+        devices=devices,
         max_steps=args.max_steps,
         accumulate_grad_batches=args.accumulate_grad_batches,
         check_val_every_n_epoch=args.check_val_every_n_epoch,
