@@ -335,10 +335,15 @@ def main():
         quantization_points,
     )
 
-    for name in test_totals:
-        scored_sites = test_counts[name].sum()
-        mean_ll = test_totals[name].sum() / scored_sites
-        print(f"  {name:<24} mean per-site LL = {mean_ll:+.4f} over {scored_sites} sites")
+    for label, totals, counts in (
+        ("Test families", test_totals, test_counts),
+        ("Train held-out subset", train_totals, train_counts),
+    ):
+        print(f"{label}:")
+        for name in totals:
+            scored_sites = counts[name].sum()
+            mean_ll = totals[name].sum() / scored_sites
+            print(f"  {name:<24} mean per-site LL = {mean_ll:+.4f} over {scored_sites} sites")
 
     plot_mean_likelihood(
         test_totals, test_counts, quantization_points, "figure2_likelihood_eval_test.pdf"
