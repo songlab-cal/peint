@@ -115,6 +115,15 @@ Correctness for every row above: `parity.py --tier 1` reports
 `max_abs_diff == 0.0` on logits, likelihood, generation and homology (the last
 also confirms identical ranking).
 
+Against the *absolute* reference — the released `protevo/tests/y_logits.npy`,
+which predates this branch — `golden_check.py` shows the optimized tree sitting
+bit-identically as close as the pristine tree, on both precision paths:
+2.19e-05 (Vanilla fp32, inside the pytest 1e-4 tolerance) and 0.296 max /
+0.013 mean (Flash bf16). Note the second one: the Flash path has never been
+within that tolerance, because the fixture is fp32 and Flash runs bf16. That is
+pre-existing, but it means "reproduces y_logits.npy" is a claim about the Vanilla
+path only.
+
 ### Multi-GPU scaling
 
 All-vs-all on the optimized tree, 4× A5000, N=400 (159 600 pairs):

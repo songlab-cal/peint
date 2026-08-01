@@ -312,7 +312,41 @@ Homology N=200 at jitter 0.5: 53.4 s both ways — no difference.
 | Tier-1 parity, homology hits | `max_abs_diff = 0.0`, ranking identical (992 pairs) |
 | Tier-2, packed vs unpacked | `max_abs_diff = 0.0` (512 targets, 1560 pairs) |
 | 4-GPU vs 1-GPU hit list | identical, 14 280 hits |
+| golden fixture `y_logits.npy` | see below |
 | package test suite | 129 passed, 1 failed, 3 skipped |
+
+### Fidelity against the released golden fixture
+
+`protevo/tests/y_logits.npy` predates this branch, so it is the one *absolute*
+reference available — everything else compares the optimized tree to the pristine
+tree. `tests/test_model_inference.py::test_logits_match_reference` **passes**
+(confirmed running, not skipped).
+
+That test alone is a narrow check, though: it exercises only the Vanilla
+(non-Flash, fp32) path via `loaded_model(use_flash=False)`, at `np.allclose`
+tolerance — and almost all of this branch's work is in the Flash variants.
+`benchmarks/inference/golden_check.py` covers both paths and both trees:
+
+| path | pristine vs fixture | optimized vs fixture | optimized vs pristine |
+|---|---|---|---|
+| Vanilla fp32 | max 2.19e-05, mean 1.41e-06 ✓ within 1e-4 | max 2.19e-05, mean 1.41e-06 ✓ | **0.0** |
+| Flash bf16 | max 0.296, mean 0.0131 | max 0.296, mean 0.0131 | **0.0** |
+
+The optimized tree's distance from the fixture is bit-identical to the pristine
+tree's, on both paths. The optimization introduced no drift of its own — which is
+the assertion `golden_check.py` enforces.
+
+Worth stating plainly, because it is easy to over-read the pytest result: **the
+Flash path has never been within the fixture's 1e-4 tolerance.** It sits 0.296 max
+/ 0.013 mean away, because the fixture is fp32 and the Flash variants run bf16.
+That is a pre-existing property of the released code, not something introduced
+here — but "reproduces `y_logits.npy`" is a statement about the Vanilla path only,
+and should not be quoted unqualified.
+
+```bash
+python benchmarks/inference/golden_check.py             # Flash bf16
+python benchmarks/inference/golden_check.py --no-flash  # Vanilla fp32
+```
 
 The one failure is `tests/test_a5_lora.py::test_lora_config_differs_from_baseline_only_in_finetune_axes`,
 **pre-existing on the base commit**: `f7a7d68` set `lora.yaml` to
