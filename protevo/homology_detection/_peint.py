@@ -36,6 +36,12 @@ class PeintSearchConfig:
         time: Default evolutionary time for comparisons
         batch_size: Batch size for decoder evaluation
         use_flash: Whether to use Flash Attention
+        pack_by_length: Opt-in length-bucketed batching. Off by default because it
+            changes batch composition and so perturbs scores in the last few
+            significant figures (see protevo.inference._batching). Worth enabling
+            on proteomes, where sequence lengths vary widely and fixed-size batches
+            are mostly padding.
+        max_tokens: Padded-position budget per batch when pack_by_length is set.
     """
 
     checkpoint_path: str
@@ -43,6 +49,8 @@ class PeintSearchConfig:
     time: float = 1.0
     batch_size: int = 32
     use_flash: bool = True
+    pack_by_length: bool = False
+    max_tokens: Optional[int] = None
 
 
 class PeintHomologySearcher(HomologySearcher):
@@ -122,6 +130,8 @@ class PeintHomologySearcher(HomologySearcher):
                     device=self.device,
                     batch_size=self.config.batch_size,
                     y_tokens=query_tokens,
+                    pack_by_length=self.config.pack_by_length,
+                    max_tokens=self.config.max_tokens,
                 )
         return nlls.tolist() if hasattr(nlls, "tolist") else list(nlls)
 

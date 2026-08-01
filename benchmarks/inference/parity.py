@@ -137,6 +137,18 @@ def main() -> None:
     ap.add_argument("--n-targets", type=int, default=256)
     ap.add_argument("--n-sequences", type=int, default=32)
     ap.add_argument("--decode-steps", type=int, default=64)
+    ap.add_argument("--length-jitter", type=float, default=0.0,
+                    help=("Ragged-length fraction for the synthetic corpus. Needed "
+                          "for Tier-2 length-bucketing checks: at jitter 0 every "
+                          "sequence is the same length, so bucketing is a no-op "
+                          "and would report a deviation of exactly zero."))
+    ap.add_argument("--baseline-extra", default="",
+                    help="Extra run_workload.py flags for the baseline side only")
+    ap.add_argument("--fast-extra", default="",
+                    help=("Extra run_workload.py flags for the fast side only. With "
+                          "--baseline-repo . --fast-repo . this compares a flag on "
+                          "vs off within one tree, which is how Tier-2 options like "
+                          "--pack-by-length are measured."))
     ap.add_argument("--workdir", default=None,
                     help="Where to keep the dumps (default: a temp dir, deleted after)")
     ap.add_argument("--out", default=None, help="Optional JSON path for the verdict")
@@ -144,13 +156,20 @@ def main() -> None:
 
     baseline = os.path.abspath(args.baseline_repo)
     fast = os.path.abspath(args.fast_repo)
-    if baseline == fast:
-        raise SystemExit("[parity] baseline and fast repos are the same path")
+    baseline_extra = args.baseline_extra.split()
+    fast_extra = args.fast_extra.split()
+    if baseline == fast and baseline_extra == fast_extra:
+        raise SystemExit(
+            "[parity] both sides are the same repo with the same flags - nothing "
+            "to compare. Point --fast-repo at a different tree, or set "
+            "--fast-extra to the option you want to measure."
+        )
 
     extra = ["--device", args.device,
              "--n-targets", str(args.n_targets),
              "--n-sequences", str(args.n_sequences),
-             "--decode-steps", str(args.decode_steps)]
+             "--decode-steps", str(args.decode_steps),
+             "--length-jitter", str(args.length_jitter)]
     if args.no_flash:
         extra.append("--no-flash")
 
@@ -169,8 +188,8 @@ def main() -> None:
             base_prefix = os.path.join(workdir, f"baseline_{workload}")
             fast_prefix = os.path.join(workdir, f"fast_{workload}")
 
-            _run_dump(baseline, workload, base_prefix, extra)
-            _run_dump(fast, workload, fast_prefix, extra)
+            _run_dump(baseline, workload, base_prefix, extra + baseline_extra)
+            _run_dump(fast, workload, fast_prefix, extra + fast_extra)
 
             exact, detail = comparer(pattern.format(base_prefix), pattern.format(fast_prefix))
             detail["exact"] = exact
@@ -188,6 +207,8 @@ def main() -> None:
         "tier": args.tier,
         "baseline_repo": baseline,
         "fast_repo": fast,
+        "baseline_extra": args.baseline_extra,
+        "fast_extra": args.fast_extra,
         "results": results,
         "passed": not failures,
     }

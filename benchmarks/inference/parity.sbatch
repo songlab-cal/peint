@@ -41,8 +41,8 @@ python -c "import torch; assert torch.cuda.is_available(); \
 print('CUDA ok:', torch.cuda.get_device_name(0), torch.cuda.get_device_capability(0))"
 
 python benchmarks/inference/parity.py \
-  --baseline-repo ../peint \
-  --fast-repo . \
+  --baseline-repo "${BASELINE_REPO:-../peint}" \
+  --fast-repo "${FAST_REPO:-.}" \
   --workloads "$WORKLOADS" \
   --tier "$TIER" \
   --out "$OUT" \

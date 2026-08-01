@@ -38,6 +38,12 @@ from protevo.models._transformer_modules import (
     FFN_EXPANSION_FACTOR,
 )
 from protevo.models._config import PeintConfig
+from protevo.inference._batching import (
+    DEFAULT_MAX_TOKENS,
+    fixed_size_batches,
+    largest_batch_first,
+    token_budget_batches,
+)
 from protevo.inference._tokenize import build_token_lut, encode_batch, pad_encoded
 
 from protevo.utils import amino_acids
@@ -450,6 +456,8 @@ class _PeintTransformerBase(nn.Module, ABC):
         device: torch.device,
         batch_size: int = 128,
         y_tokens: Optional[Sequence[np.ndarray]] = None,
+        pack_by_length: bool = False,
+        max_tokens: Optional[int] = None,
     ) -> np.ndarray:
         """Evaluate likelihood of target sequences given a source sequence.
 
@@ -467,6 +475,17 @@ class _PeintTransformerBase(nn.Module, ABC):
                 as returned by ``protevo.inference.encode_all``). Lets a caller that
                 scores the same corpus against many references — homology
                 all-vs-all — pay tokenization once instead of once per reference.
+            pack_by_length: Opt-in. Group targets of similar length instead of
+                consuming them in input order, so batches carry far less padding
+                and short sequences pack more rows per batch.
+                **Off by default and not bit-exact**: it changes which sequences
+                share a batch, which perturbs NLLs in the last few significant
+                figures exactly as changing ``batch_size`` already does. Results
+                are still returned in the order of ``y``.
+                Note ``batch_size`` is ignored when this is set — ``max_tokens``
+                becomes the thing that bounds a batch.
+            max_tokens: Padded-position budget per batch when ``pack_by_length`` is
+                set. Defaults to ``protevo.inference._batching.DEFAULT_MAX_TOKENS``.
 
         Returns:
             Array of mean per-residue negative log-likelihoods (one per target)
@@ -475,19 +494,43 @@ class _PeintTransformerBase(nn.Module, ABC):
         if y_tokens is not None:
             assert len(y_tokens) == len(y), "y_tokens must align with y"
 
-        likelihoods = []
+        n = len(y)
+        if n == 0:
+            return np.empty(0, dtype=np.float32)
+
+        if pack_by_length:
+            lengths = ([len(tok) for tok in y_tokens] if y_tokens is not None
+                       else [len(seq) for seq in y])
+            # max_tokens alone governs the batch, so short sequences get *more*
+            # rows rather than the same 32. Capping rows at batch_size here would
+            # leave the batch count unchanged and reduce only intra-batch padding,
+            # which measured as no speedup at all: with flash-attention already
+            # unpadding internally, this workload is launch-bound rather than
+            # padded-FLOP-bound, so the win has to come from fewer, fuller batches.
+            batches = largest_batch_first(token_budget_batches(
+                lengths,
+                max_tokens=max_tokens or DEFAULT_MAX_TOKENS,
+                max_batch_size=None,
+            ))
+        else:
+            batches = fixed_size_batches(n, batch_size)
+
         encoded_x, _ = self.encode_sequences([x])
         # Uploaded once and then broadcast, rather than materializing B copies on
         # the host and re-sending them for every batch.
         encoded_x = encoded_x.to(device)
 
-        for i in tqdm(range(0, len(y), batch_size)):
+        # Scattered back into corpus order, so the caller sees the order of ``y``
+        # whichever batching produced it.
+        out = None
+
+        for ordinal, idxs in enumerate(tqdm(batches)):
             if y_tokens is not None:
                 y_encoded, y_targets = pad_encoded(
-                    y_tokens[i:i + batch_size], self.vocab, targets=True
+                    [y_tokens[j] for j in idxs], self.vocab, targets=True
                 )
             else:
-                y_batch = y[i:i + batch_size]
+                y_batch = [y[j] for j in idxs]
                 y_encoded, y_targets = self.encode_sequences(y_batch, targets=True)
             y_encoded = y_encoded.to(device)
             y_targets = y_targets.to(device)
@@ -496,10 +539,17 @@ class _PeintTransformerBase(nn.Module, ABC):
             x_encoded = encoded_x.expand(y_encoded.size(0), -1)
             x_attn_mask = x_encoded.eq(self.vocab.padding_idx)
 
-            times = torch.tensor(t[i:i + batch_size]).unsqueeze(-1).to(device)
+            # Indexing rather than slicing, since batches need not be contiguous.
+            # Dtype is unaffected: torch.tensor infers float32 from Python floats
+            # and float64 from numpy scalars either way, so a list `t` and an
+            # ndarray `t` both land on the dtype the old slicing produced.
+            times = torch.tensor([t[j] for j in idxs]).unsqueeze(-1).to(device)
 
+            # ordinal, not the slice offset: _likelihood_logits only tests
+            # `> 0` to decide whether to reuse the cached encoder, and with
+            # variable-width batches there is no slice offset to pass.
             logits = self._likelihood_logits(
-                i, x_encoded, y_encoded, times, x_attn_mask, y_attn_mask
+                ordinal, x_encoded, y_encoded, times, x_attn_mask, y_attn_mask
             )
 
             ll = nn.functional.cross_entropy(
@@ -511,10 +561,14 @@ class _PeintTransformerBase(nn.Module, ABC):
 
             non_pad = y_targets.ne(self.vocab.padding_idx)
             ll = (ll * non_pad).sum(dim=-1) / non_pad.sum(dim=-1)
-            likelihoods.append(ll.cpu().numpy())
+
+            ll_np = ll.cpu().numpy()
+            if out is None:
+                out = np.empty(n, dtype=ll_np.dtype)
+            out[idxs] = ll_np
 
         self._reset_likelihood_cache()
-        return np.vstack([ll[:, None] for ll in likelihoods]).squeeze()
+        return out.squeeze()
 
 
 ######################################

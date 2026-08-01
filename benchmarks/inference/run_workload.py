@@ -69,6 +69,10 @@ def main() -> None:
     ap.add_argument("--length-jitter", type=float, default=0.0,
                     help="Ragged-length fraction for the synthetic corpus")
     ap.add_argument("--corpus-seed", type=int, default=0)
+    ap.add_argument("--pack-by-length", action="store_true",
+                    help="Tier-2: length-bucketed batching (not bit-exact)")
+    ap.add_argument("--max-tokens", type=int, default=None,
+                    help="Padded-position budget per batch when --pack-by-length is set")
     ap.add_argument("--num-gpus", type=int, default=1,
                     help="Shard the homology workload across N GPUs (optimized tree only)")
     ap.add_argument("--seed", type=int, default=0, help="Torch RNG seed")
@@ -98,6 +102,8 @@ def main() -> None:
     meta.update({
         "repo": repo,
         "num_gpus": args.num_gpus,
+        "pack_by_length": args.pack_by_length,
+        "max_tokens": args.max_tokens,
         "workload": args.workload,
         "mode": args.mode,
         "checkpoint": checkpoint,

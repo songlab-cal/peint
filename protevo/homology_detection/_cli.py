@@ -87,6 +87,27 @@ def add_peint_args(parser: argparse.ArgumentParser) -> None:
         help="Disable Flash Attention",
     )
     parser.add_argument(
+        "--pack-by-length",
+        action="store_true",
+        help=(
+            "Group queries of similar length into batches instead of using input "
+            "order, so batches carry much less padding (PEINT only; off by "
+            "default). NOT bit-exact: it changes which sequences share a batch, "
+            "which perturbs scores in the last few significant figures the same "
+            "way changing --batch-size already does."
+        ),
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=None,
+        help=(
+            "Padded-position budget per batch when --pack-by-length is set "
+            "(default 16384, roughly the cost of --batch-size 32 at typical "
+            "protein lengths)."
+        ),
+    )
+    parser.add_argument(
         "--num-gpus",
         type=int,
         default=1,
@@ -144,6 +165,8 @@ def create_searcher(args):
             time=getattr(args, "time", None) or getattr(args, "default_time", 1.0),
             batch_size=args.batch_size,
             use_flash=not args.no_flash,
+            pack_by_length=getattr(args, "pack_by_length", False),
+            max_tokens=getattr(args, "max_tokens", None),
         )
         return PeintHomologySearcher(config)
     else:
@@ -216,6 +239,8 @@ def cmd_all_vs_all(args):
                 batch_size=args.batch_size,
                 num_gpus=num_gpus,
                 use_flash=not args.no_flash,
+                pack_by_length=args.pack_by_length,
+                max_tokens=args.max_tokens,
             )
         else:
             hits = searcher.all_vs_all(sequences)
@@ -247,6 +272,8 @@ def cmd_all_vs_all(args):
                     batch_size=args.batch_size,
                     num_gpus=num_gpus,
                     use_flash=not args.no_flash,
+                    pack_by_length=args.pack_by_length,
+                    max_tokens=args.max_tokens,
                 )
             else:
                 hits = searcher.all_vs_all_proteomes(

@@ -157,6 +157,8 @@ def _score_worker(
     checkpoint: str,
     use_flash: bool,
     batch_size: int,
+    pack_by_length: bool = False,
+    max_tokens: Optional[int] = None,
 ) -> List[Tuple[int, np.ndarray]]:
     """Score one (reference, targets, times) job per shard item."""
     from protevo.models import load_peint_model
@@ -172,6 +174,7 @@ def _score_worker(
         nlls = model.evaluate_likelihood(
             x=ref_seq, y=list(targets), t=list(times),
             device=device, batch_size=batch_size,
+            pack_by_length=pack_by_length, max_tokens=max_tokens,
         )
         out.append((job_idx, np.atleast_1d(np.asarray(nlls, dtype=np.float64))))
     return out
@@ -183,6 +186,8 @@ def score_targets_sharded(
     batch_size: int = 32,
     num_gpus: Optional[int] = None,
     use_flash: bool = True,
+    pack_by_length: bool = False,
+    max_tokens: Optional[int] = None,
 ) -> List[np.ndarray]:
     """Score many ``(reference, targets, times)`` jobs across all GPUs.
 
@@ -195,7 +200,8 @@ def score_targets_sharded(
         One NLL array per job, in the order of ``jobs``.
     """
     worker = partial(
-        _score_worker, checkpoint=checkpoint, use_flash=use_flash, batch_size=batch_size
+        _score_worker, checkpoint=checkpoint, use_flash=use_flash, batch_size=batch_size,
+        pack_by_length=pack_by_length, max_tokens=max_tokens,
     )
     return run_sharded(list(jobs), worker, num_gpus=num_gpus)
 
@@ -214,6 +220,8 @@ def _homology_worker(
     time: float,
     batch_size: int,
     use_flash: bool,
+    pack_by_length: bool = False,
+    max_tokens: Optional[int] = None,
 ) -> List[Tuple[int, List[Dict[str, Any]]]]:
     """Score every other sequence against each reference in this rank's shard."""
     from protevo.homology_detection._peint import PeintHomologySearcher, PeintSearchConfig
@@ -224,6 +232,8 @@ def _homology_worker(
         time=time,
         batch_size=batch_size,
         use_flash=use_flash,
+        pack_by_length=pack_by_length,
+        max_tokens=max_tokens,
     ))
 
     seq_ids = [sid for sid, _ in sequences]
@@ -256,6 +266,8 @@ def all_vs_all_sharded(
     batch_size: int = 32,
     num_gpus: Optional[int] = None,
     use_flash: bool = True,
+    pack_by_length: bool = False,
+    max_tokens: Optional[int] = None,
 ) -> List:
     """All-vs-all homology search, sharded over reference sequences.
 
@@ -274,6 +286,7 @@ def all_vs_all_sharded(
         _homology_worker,
         checkpoint=checkpoint, sequences=list(sequences), time=time,
         batch_size=batch_size, use_flash=use_flash,
+        pack_by_length=pack_by_length, max_tokens=max_tokens,
     )
     per_ref = run_sharded(list(range(len(sequences))), worker, num_gpus=num_gpus)
 
@@ -299,6 +312,8 @@ def _proteomes_worker(
     skip_same_proteome: bool,
     batch_size: int,
     use_flash: bool,
+    pack_by_length: bool = False,
+    max_tokens: Optional[int] = None,
 ) -> List[Tuple[int, List[Dict[str, Any]]]]:
     """Score one reference sequence per shard item, across proteomes."""
     from protevo.homology_detection._peint import PeintHomologySearcher, PeintSearchConfig
@@ -309,6 +324,8 @@ def _proteomes_worker(
         time=default_time,
         batch_size=batch_size,
         use_flash=use_flash,
+        pack_by_length=pack_by_length,
+        max_tokens=max_tokens,
     ))
 
     tokens_by_proteome = searcher.tokenize_proteomes(proteomes)
@@ -347,6 +364,8 @@ def all_vs_all_proteomes_sharded(
     batch_size: int = 32,
     num_gpus: Optional[int] = None,
     use_flash: bool = True,
+    pack_by_length: bool = False,
+    max_tokens: Optional[int] = None,
 ) -> List:
     """Cross-proteome all-vs-all, sharded over reference sequences.
 
@@ -373,6 +392,7 @@ def all_vs_all_proteomes_sharded(
         checkpoint=checkpoint, proteomes=dict(proteomes), distances=distances,
         default_time=default_time, skip_same_proteome=skip_same_proteome,
         batch_size=batch_size, use_flash=use_flash,
+        pack_by_length=pack_by_length, max_tokens=max_tokens,
     )
     per_ref = run_sharded(items, worker, num_gpus=num_gpus)
 
