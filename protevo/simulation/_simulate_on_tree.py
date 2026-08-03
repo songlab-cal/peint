@@ -476,6 +476,9 @@ def simulate_families_with_rejection_sampling_batched(
                 p_threshold = nucleus_sampling_p,
                 ratio_rejection_sampling = ratio_rejection_sampling,
             )
+        # Key root sequences by family so the caller can look them up by name,
+        # matching the progressive branch (single-shot otherwise returns the list).
+        root_sequences = {name: seq for name, seq in zip(family_names, root_sequences)}
     else:
         root_sequences = {tree.treename: seq for tree, seq in zip(trees, root_sequences)}
         simulated = simulate_evolution_with_rejection_sampling_batched(
