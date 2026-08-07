@@ -14,6 +14,25 @@
 # Override STAGE_ROOT=/dev/shm/peint_env to extract into the 1 TB tmpfs instead
 # of NVMe (faster still, but costs RAM and evaporates on reboot).
 
+# Only nodes that mount /scratch over NFSv4.2 pay the small-file penalty; on an
+# NFSv3 node staging would cost 172 s to buy nothing. Detect and skip.
+# STAGE_FORCE=1 stages regardless, STAGE_FORCE=0 never stages.
+_scratch_fstype=$(findmnt -no FSTYPE,OPTIONS --target /scratch/users/yufan.cao 2>/dev/null | tr -d ' ')
+case "${STAGE_FORCE:-auto}" in
+  0) _need_stage=no ;;
+  1) _need_stage=yes ;;
+  *) case "$_scratch_fstype" in *nfs4*vers=4.2*) _need_stage=yes ;; *) _need_stage=no ;; esac ;;
+esac
+
+if [ "$_need_stage" = "no" ]; then
+    export PY=/scratch/users/yufan.cao/conda/envs/prot-evo/bin/python
+    export PATH="/scratch/users/yufan.cao/conda/envs/prot-evo/bin:$PATH"
+    echo "[stage] $(hostname): /scratch is not NFSv4.2 - using the shared env directly"
+    echo "[stage] PY=$PY"
+    return 0 2>/dev/null || exit 0
+fi
+echo "[stage] $(hostname): /scratch is NFSv4.2 - staging required"
+
 STAGE_ROOT=${STAGE_ROOT:-/tmp/peint_env}
 TARBALL=${TARBALL:-/scratch/users/yufan.cao/env_stage/prot-evo.tar.gz}
 ENV_LOCAL="$STAGE_ROOT/prot-evo"

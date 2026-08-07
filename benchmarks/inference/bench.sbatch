@@ -26,8 +26,10 @@
 
 set -euo pipefail
 
-source /usr/local/linux/miniforge-3.13/etc/profile.d/conda.sh
-conda activate prot-evo
+# Auto-stages onto node-local NVMe when this node mounts /scratch over NFSv4.2,
+# otherwise uses the shared env. Exports $PY. Replaces `conda activate`, which is
+# itself one of the things that stalls on those nodes.
+source /scratch/users/yufan.cao/peint-dev/rebuttal/peint-fast/benchmarks/staging/stage_env.sh
 
 # Backbone weights come from scratch, never from a borrowed node's /tmp.
 export TORCH_HOME=/scratch/users/yufan.cao/torch_cache
@@ -54,10 +56,10 @@ BATCH_SIZES=$(echo "$BATCH_SIZES" | tr ' ' ',')
 EXTRA=${EXTRA:-}
 
 echo "Host: $(hostname)  REPO: $REPO  WORKLOAD: $WORKLOAD  OUT: $OUT"
-python -c "import torch; assert torch.cuda.is_available(); \
+"$PY" -c "import torch; assert torch.cuda.is_available(); \
 print('CUDA ok:', torch.cuda.get_device_name(0), torch.cuda.get_device_capability(0))"
 
-python benchmarks/inference/run_workload.py \
+"$PY" benchmarks/inference/run_workload.py \
   --repo "$REPO" \
   --workload "$WORKLOAD" \
   --mode "${MODE:-bench}" \
