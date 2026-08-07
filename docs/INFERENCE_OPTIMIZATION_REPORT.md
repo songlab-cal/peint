@@ -6,6 +6,44 @@ Branch `inference-speedup`, worktree `rebuttal/peint-fast/`, branched from
 
 ---
 
+## 0. Where this stands
+
+Single GPU, sequence generation (284-residue sources, bf16, each card at its own
+best batch):
+
+| GPU | batch | seq/s | tok/s | M seq / GPU-hour | M seq / GPU-day |
+|---|---|---|---|---|---|
+| **H200** | 3072 | **274** | 155 650 | 0.99 | 23.7 |
+| A100-40GB | 768 | 151 | 85 831 | 0.54 | 13.1 |
+| A100-80GB | 1024 | 128 | 72 815 | 0.46 | 11.1 |
+
+Against the released code, same card, each at its own best batch: **3.3x** on A100
+(45.8 -> 151.1 seq/s). Roughly two thirds of that comes from being able to run a
+larger batch at all — the optimizations halved activation memory and the baseline
+OOMs first.
+
+Other workloads on H200: likelihood/VEP **6.95x** (526 ms vs 3656 ms for 2048
+targets), homology all-vs-all **2.98x** (26.3 s vs 78.5 s at N=200).
+
+Everything above is bit-exact against the released checkpoint, verified
+independently on A5000, A100 and H200.
+
+**Fleet.** Staging the conda env to node-local NVMe (see
+`benchmarks/staging/README.md`) made the two NFSv4.2 nodes usable, taking
+`jsteinhardt` from 2 to **4 H200 nodes = 32 GPUs**, or roughly 8 800 seq/s and
+**~760 M sequences/day** — if multi-node fan-out scales. Tested to 4 GPUs on one
+node; beyond that is unmeasured.
+
+**Remaining single-GPU headroom looks like <=2x.** The decode loop is
+KV-cache-bandwidth-bound: at batch 3072 a step moves 22.5 GB, of which 22.4 GB is
+K/V and 0.05 GB is weights, sustaining ~1.1 TB/s. Cross-attention must re-read
+every encoder key on every step and self-attention the whole prefix, at ~1 FLOP per
+byte — that is what attention *is*, and no kernel change alters it. The only real
+levers are moving fewer bytes (fp8 K/V, ~2x, not bit-exact) or closing whatever gap
+remains to achievable bandwidth.
+
+---
+
 ## 1. Headline results
 
 Release `peint.ckpt` (ESM2-150M frozen backbone + PEINT layers), measured on
@@ -468,8 +506,12 @@ useless work cannot be an objective. It is a reasonable proxy for training
 (compute-bound, FLOPs fixed by model x data); autoregressive decode is inherently
 low arithmetic intensity, so even an optimal decoder scores low.
 
-What the table legitimately shows is a *diagnosis*: neither compute-bound (MFU
-~0) nor bandwidth-bound (HBM 1-3%), therefore **overhead-bound**. The `ms/step`
+What the table legitimately shows is a *diagnosis* — but note the HBM column above
+is **wrong**: it counted weight traffic only and undercounted by ~20x, which led me
+to call the loop "overhead-bound". Counting K/V traffic (see
+`decode_bytes_per_step`), a batch-3072 step moves 22.5 GB and sustains ~1.1 TB/s,
+so the loop is **memory-bound at large batch** and only overhead-bound at small
+batch. The `ms/step`
 column says the same thing more directly — 1024x the work for 2.5x the time, so
 per-step cost is nearly all fixed overhead. That is why batch size dominates, and
 why CUDA graphs would mostly help *latency* rather than throughput.

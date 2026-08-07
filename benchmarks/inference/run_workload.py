@@ -95,6 +95,7 @@ def main() -> None:
 
     # Calibrate the roofline on this exact card, once, before any model runs.
     peak_tflops = harness.measure_peak_tflops(device) if args.device == "cuda" else float("nan")
+    peak_gbs = harness.measure_peak_bandwidth(device) if args.device == "cuda" else float("nan")
     use_flash = not args.no_flash
     checkpoint = args.checkpoint or os.path.join(repo, "model_checkpoints", "peint.ckpt")
     if not os.path.exists(checkpoint):
@@ -106,6 +107,7 @@ def main() -> None:
         "repo": repo,
         "num_gpus": args.num_gpus,
         "measured_peak_bf16_tflops": peak_tflops,
+        "measured_peak_hbm_gbs": peak_gbs,
         "pack_by_length": args.pack_by_length,
         "max_tokens": args.max_tokens,
         "workload": args.workload,
@@ -183,8 +185,11 @@ def main() -> None:
             row["total_tflops"] = fl["total_flops"] / 1e12
             row["achieved_tflops"] = fl["total_flops"] / secs / 1e12
             row["mfu"] = harness.mfu(fl["total_flops"], secs, peak_tflops)
+            srclen = info["src_len"] + 2
+            row["decode_gb_per_step"] = harness.decode_bytes_per_step(
+                bs, srclen, steps)["total_bytes"] / 1e9
             row["decode_bw_util"] = harness.decode_bandwidth_utilization(
-                n_params, steps, secs, vendor.get("hbm_gbs", float("nan")))
+                bs, srclen, steps, secs, peak_gbs)
             rows.append(row)
             # samples/s leads: it is the objective. tok/s, MFU and HBM follow as
             # diagnostics - MFU in particular is NOT a target (you can raise it by

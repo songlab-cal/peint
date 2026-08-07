@@ -310,16 +310,64 @@ def mfu(total_flops: float, seconds: float, peak_tflops: float) -> float:
     return (total_flops / seconds / 1e12) / peak_tflops
 
 
-def decode_bandwidth_utilization(n_params: int, steps: int, seconds: float,
-                                 peak_gbs: float, bytes_per_param: int = 2) -> float:
-    """Fraction of HBM bandwidth used re-reading weights during decode.
+def measure_peak_bandwidth(device=None, n_bytes: int = 2 * 1024**3,
+                           iters: int = 20) -> float:
+    """Achievable HBM bandwidth on this device, GB/s, via a large copy.
 
-    Autoregressive decode at modest batch is weight-bound, not FLOP-bound: every
-    step streams the whole parameter set through the SMs regardless of batch size,
-    so MFU can look terrible while the card is in fact saturated. This is the
-    metric that tells the two apart.
+    The vendor figure is a ceiling no real kernel reaches. Measuring a big
+    contiguous copy on the same card gives a denominator the decode loop could
+    plausibly have hit, the same way measure_peak_tflops does for compute.
     """
-    if not seconds or not peak_gbs:
+    if not torch.cuda.is_available():
         return float("nan")
-    moved_gb = n_params * bytes_per_param * steps / 1e9
-    return (moved_gb / seconds) / peak_gbs
+    n = n_bytes // 2  # bf16 elements
+    src = torch.empty(n, device=device, dtype=torch.bfloat16)
+    dst = torch.empty_like(src)
+    for _ in range(3):
+        dst.copy_(src)
+    torch.cuda.synchronize(device)
+    start, end = torch.cuda.Event(True), torch.cuda.Event(True)
+    start.record()
+    for _ in range(iters):
+        dst.copy_(src)
+    end.record()
+    torch.cuda.synchronize(device)
+    seconds = start.elapsed_time(end) / 1e3
+    # copy touches each byte twice (read + write)
+    return (2 * n_bytes * iters) / seconds / 1e9
+
+
+def decode_bytes_per_step(batch: int, src_len: int, steps: int,
+                          d_model: int = 640, n_heads: int = 20,
+                          n_dec: int = 5, bytes_per_elem: int = 2) -> Dict[str, float]:
+    """Memory traffic of one decode step, broken down.
+
+    An earlier version of this counted **weights only** and reported ~1% HBM
+    utilization, which was wrong by ~20x and led to calling the loop
+    "overhead-bound". At realistic batch the KV cache dominates by ~450x:
+
+    * cross-attention K/V - ``batch x src_len`` per layer, constant across the
+      whole run but re-read on every single step, because attention must see all
+      keys;
+    * self-attention K/V - grows with position, averaging ``steps/2``;
+    * decoder weights - streamed once per step, and negligible beside the above.
+
+    The frozen ESM2 backbone is excluded: it runs only at prefill.
+    """
+    head_dim = d_model // n_heads
+    kv_elem = 2 * n_heads * head_dim  # K and V
+    cross = batch * src_len * kv_elem * bytes_per_elem * n_dec
+    self_attn = batch * (steps / 2.0) * kv_elem * bytes_per_elem * n_dec
+    weights = n_dec * (4 * d_model**2 + 2 * 4 * d_model**2) * bytes_per_elem
+    return {"cross_kv_bytes": cross, "self_kv_bytes": self_attn,
+            "weight_bytes": weights, "total_bytes": cross + self_attn + weights}
+
+
+def decode_bandwidth_utilization(batch: int, src_len: int, steps: int,
+                                 seconds: float, peak_gbs: float, **kw) -> float:
+    """Fraction of achievable HBM bandwidth the decode loop actually reaches."""
+    if not seconds or not peak_gbs or peak_gbs != peak_gbs:
+        return float("nan")
+    b = decode_bytes_per_step(batch, src_len, steps, **kw)["total_bytes"]
+    achieved_gbs = (b * steps / 1e9) / seconds
+    return achieved_gbs / peak_gbs

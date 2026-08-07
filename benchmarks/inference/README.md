@@ -88,6 +88,24 @@ Peak-memory numbers are reported as `nan` for sharded runs: the allocations
 happen inside the spawned ranks, where the parent's allocator cannot see them.
 The per-rank figure is the single-GPU number for that rank's shard.
 
+## Current performance
+
+| GPU | best batch | seq/s | tok/s | M seq / GPU-day |
+|---|---|---|---|---|
+| **H200** | 3072 | **274** | 155 650 | 23.7 |
+| A100-40GB | 768 | 151 | 85 831 | 13.1 |
+| A100-80GB | 1024 | 128 | 72 815 | 11.1 |
+
+3.3x over the released code on A100 at each card's best batch; 6.95x on
+likelihood/VEP and 2.98x on homology, both H200. Bit-exact throughout.
+
+With the NFSv4.2 nodes staged (`benchmarks/staging/`), `jsteinhardt` has 32 H200s
+≈ 8 800 seq/s ≈ 760 M sequences/day, subject to multi-node fan-out scaling.
+
+Remaining single-GPU headroom is ~2x at best: the decode loop is
+KV-cache-bandwidth-bound (22.4 of 22.5 GB per step is K/V), and attention has to
+re-read every key each step regardless of implementation.
+
 ## Measured
 
 Release `peint.ckpt`, ESM2-150M backbone, on three cards. Speedups are optimized
