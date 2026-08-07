@@ -92,7 +92,7 @@ The per-rank figure is the single-GPU number for that rank's shard.
 
 | GPU | best batch | seq/s | tok/s | M seq / GPU-day |
 |---|---|---|---|---|
-| **H200** | 3072 | **274** | 155 650 | 23.7 |
+| **H200** | 1024 | **276** | 156 906 | 23.9 |
 | A100-40GB | 768 | 151 | 85 831 | 13.1 |
 | A100-80GB | 1024 | 128 | 72 815 | 11.1 |
 

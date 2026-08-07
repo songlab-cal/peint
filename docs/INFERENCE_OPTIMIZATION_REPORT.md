@@ -13,7 +13,7 @@ best batch):
 
 | GPU | batch | seq/s | tok/s | M seq / GPU-hour | M seq / GPU-day |
 |---|---|---|---|---|---|
-| **H200** | 3072 | **274** | 155 650 | 0.99 | 23.7 |
+| **H200** | 1024 | **276** | 156 906 | 0.99 | 23.9 |
 | A100-40GB | 768 | 151 | 85 831 | 0.54 | 13.1 |
 | A100-80GB | 1024 | 128 | 72 815 | 0.46 | 11.1 |
 
@@ -34,13 +34,21 @@ independently on A5000, A100 and H200.
 **~760 M sequences/day** — if multi-node fan-out scales. Tested to 4 GPUs on one
 node; beyond that is unmeasured.
 
+**Best batch is 1024, and run-to-run variance is ~20%.** An earlier cross-run
+comparison put the peak at 3072; a same-node, same-run sweep shows 1024 (276.2 seq/s,
+31.4 GB) matching 3072 (274.5 seq/s, 113.9 GB). The earlier ranking was noise. Use
+1024 — identical throughput, 3.6x less memory, and the remainder becomes headroom for
+longer sequences. Never compare batch sizes across runs or nodes here.
+
 **Remaining single-GPU headroom looks like <=2x.** The decode loop is
 KV-cache-bandwidth-bound: at batch 3072 a step moves 22.5 GB, of which 22.4 GB is
-K/V and 0.05 GB is weights, sustaining ~1.1 TB/s. Cross-attention must re-read
-every encoder key on every step and self-attention the whole prefix, at ~1 FLOP per
-byte — that is what attention *is*, and no kernel change alters it. The only real
-levers are moving fewer bytes (fp8 K/V, ~2x, not bit-exact) or closing whatever gap
-remains to achievable bandwidth.
+K/V and 0.05 GB is weights, sustaining **27% of the bandwidth this card
+actually delivers** (4275 GB/s measured by on-card copy, 89% of the 4.8 TB/s spec).
+So it is not a hardware wall — but cross-attention must re-read every encoder key on
+every step and self-attention the whole prefix, at ~1 FLOP per byte. That access
+pattern will not saturate HBM no matter how it is written, so the practical ceiling
+is ~1.5-2x, via moving fewer bytes (fp8 K/V, not bit-exact) rather than kernel
+micro-tuning.
 
 ---
 
@@ -464,7 +472,7 @@ memory before it runs out of headroom. **At each card's best feasible batch,
 batch 256: 19 980 -> 10 062 MiB) converts directly into throughput, because batch
 size is the lever and memory is the cap.
 
-**H200** peaks at batch 3072 with **274.0 seq/s** (155 650 tok/s, 108.9 GB).
+**H200** saturates at batch **1024**: 276.2 seq/s in 31.4 GB. Batch 3072 gives 274.5 seq/s for 113.9 GB — the same throughput for 3.6x the memory.
 
 ### Throughput per unit compute
 
@@ -472,7 +480,7 @@ size is the lever and memory is the cap.
 |---|---|---|---|---|---|---|---|
 | A100-40GB | baseline | 512 | 45.8 | 26 037 | 37.7 GB | 0.16 | 4.0 |
 | A100-40GB | optimized | 768 | 151.1 | 85 831 | 30.0 GB | 0.54 | 13.1 |
-| H200 | optimized | 3072 | 274.0 | 155 650 | 108.9 GB | 0.99 | 23.7 |
+| H200 | optimized | 1024 | 276.2 | 156 906 | 31.4 GB | 0.99 | 23.9 |
 
 Scales roughly linearly with sequence length (cost is ~2 x source length decode
 steps), so treat these as figures for ~284-residue proteins.

@@ -858,6 +858,10 @@ class PeintGenerator(PeintTransformer):
             y_attn_mask = next_token.eq(self.vocab.padding_idx)
             logits = self.forward(x, next_token, t, x_attn_mask, y_attn_mask, use_cache=True)
 
+        # Diagnostic only: how many steps the loop actually ran, as opposed to
+        # max_decode_steps. Nothing reads this during generation.
+        self.last_decode_steps = y_decoded.size(1) - 1
+
         self._reset_kv_cache()
         return self.decode_sequences(y_decoded)
 

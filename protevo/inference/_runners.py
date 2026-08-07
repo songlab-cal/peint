@@ -70,13 +70,19 @@ def _generate_worker(
     autocast: bool,
 ) -> List[Tuple[int, List[str]]]:
     """Generate one batch of sequences per shard item."""
+    import time
+
     from protevo.models import load_peint_model
 
+    _t_load = time.perf_counter()
     model, vocab = load_peint_model(
         checkpoint_path=checkpoint, device=device,
         model_type="generator", use_flash=use_flash,
     )
     model = model.eval()
+    _load_s = time.perf_counter() - _t_load
+    _gen_s = 0.0
+    _steps = 0
 
     out: List[Tuple[int, List[Tuple[int, str]]]] = []
     for chunk_idx, batch in shard:
@@ -98,12 +104,22 @@ def _generate_worker(
         t = torch.tensor(times, dtype=torch.float32).unsqueeze(-1).to(device)
 
         steps = max_decode_steps or 2 * max(len(s) for s in sources)
+        _t0 = time.perf_counter()
         with _autocast(device, autocast):
             generated = model.generate(
                 x=x, t=t, max_decode_steps=steps, device=device,
                 temperature=temperature, p=p,
             )
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        _gen_s += time.perf_counter() - _t0
+        _steps += getattr(model, "last_decode_steps", steps) * len(sources)
         out.append((chunk_idx, list(zip(orig_idx, generated))))
+
+    # Printed rather than returned: the merge in run_sharded keys on item index,
+    # and threading a side-channel through it would complicate every caller.
+    print(f"[worker rank={rank}] model_load={_load_s:.1f}s generate={_gen_s:.1f}s "
+          f"steps_executed={_steps}", flush=True)
     return out
 
 
