@@ -386,6 +386,30 @@ queries, so those rows are not comparable to each other. And no baseline run was
 made at N=400, so a combined Tier-1 + multi-GPU figure against the original code
 would be an extrapolation, not a measurement.
 
+
+### Length binning for generation: 1.37x on a ragged corpus
+
+`generate_sharded(..., pack_by_length=True)`. Measured on A100-40GB, 2048 sources
+of length 28-283, batch 64, with model load timed separately:
+
+| | generation only | wall | decode steps executed |
+|---|---|---|---|
+| unbucketed | 93.8 s | 112.5 s | 663 104 |
+| bucketed | **68.4 s** | 86.2 s | **465 856** |
+| ratio | **1.37x** | 1.31x | 1.42x |
+
+18.2 -> 23.7 seq/s. Steps executed track generation time closely (1.42x vs 1.37x),
+confirming sequential decode steps are the cost driver - a batch runs
+`2 x max(source length)` steps and does not exit until every row emits `<eos>`, so
+mixing a 28-residue source with a 283-residue one makes the short one pay.
+
+Two earlier numbers for this were both wrong. **1.07x** came from a run whose every
+timed call carried a ~15 s checkpoint build (45% of wall at n=512); at n=2048 with
+load measured separately that confound is gone. **1.7-1.8x** was an analytic
+prediction from `decode_step_waste`, which assumes each batch runs the full
+`2 x max(len)` - the early exit on `eos_reached.all()` falsifies that and recovered
+44% of the gap the metric assumed. Trust the executed-step counter, not the bound.
+
 ### Tier-2 length bucketing (opt-in) — 2048 targets
 
 | corpus | lengths | fixed-32 batches / waste | packed batches / waste | unpacked | packed | speedup |
@@ -549,18 +573,16 @@ feature dimension rather than the batch. Recorded as an observation on one GPU a
 one set of shapes, not a guarantee — cuBLAS can split reductions differently as
 the batch dimension changes — which is why the flag and the check remain.
 
-**Length binning for generation helps far less than the step count implies.** I
-predicted 1.7-1.8x on a ragged corpus by counting decode steps. Measured on 512
-sequences of length 28-283: decode-step waste falls 43% -> 9% exactly as
-predicted, but wall time moves only 35.2 -> 32.9 s (**1.07x**). The measurement is
-also confounded — `_generate_worker` loads the checkpoint *inside* the worker, so
-every timed call carries a full ESM2-150M build (~15 s of the ~33 s). Backing that
-out gives roughly 1.13x, still nowhere near the prediction. The likely reason is
-that `decode_step_waste` assumes each batch runs the full `2 x max`, which the
-loop's early exit on `eos_reached.all()` makes false. Treat the binning number as
-unresolved: the flag is implemented, correct and off by default, but it should not
-be advertised as a throughput win until measured with the load excluded and the
-*actual* executed steps instrumented.
+**Length binning for generation: predicted 1.7-1.8x, first measured 1.07x, actually
+1.37x.** Both earlier figures were wrong for different reasons. The 1.07x run gave
+every timed call a ~15 s checkpoint build, 45% of wall time at n=512. The 1.7-1.8x
+prediction came from `decode_step_waste`, which assumes each batch runs the full
+`2 x max(len)`; the early exit on `eos_reached.all()` falsifies that and recovered
+44% of the assumed gap. With load timed separately at n=2048, generation goes
+93.8 s -> 68.4 s (**1.37x**), and executed decode steps 663 104 -> 465 856 (1.42x),
+which track each other closely. Lesson: instrument what actually executed rather
+than trusting an analytic bound, and never let a fixed per-call cost sit inside the
+timed region.
 
 **A dtype hazard that wasn't one.** Replacing `t[i:i+bs]` with `[t[j] for j in
 idxs]` looked like it would change `torch.tensor`'s inferred dtype for numpy

@@ -206,9 +206,11 @@ an extrapolation, not a measurement.
 
 ## Tier 2: length bucketing (opt-in, off by default)
 
-**Read the measurement below before enabling this. It buys ~3–5% on likelihood
-and nothing on homology.** It is implemented, correct and tested, but it did not
-turn out to be worth much for this model.
+**Two different things share this flag, and they behave oppositely.** On
+*likelihood/homology* it buys ~3-5% and nothing respectively - not worth enabling.
+On *generation over a ragged corpus* it is worth **1.37x** and should be on. The
+difference is what the waste consists of: padded positions, which flash-attention
+already skips, versus sequential decode steps, which nothing skips.
 
 Fixed-size batching consumes queries in input order and pads to the batch
 maximum. `--pack-by-length` sorts by length and fills batches to a
