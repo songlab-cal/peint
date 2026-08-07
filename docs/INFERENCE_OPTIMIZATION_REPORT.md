@@ -389,7 +389,7 @@ would be an extrapolation, not a measurement.
 
 ### Length binning for generation: 1.37x on a ragged corpus
 
-`generate_sharded(..., pack_by_length=True)`. Measured on A100-40GB, 2048 sources
+`generate_sharded(...)` — **on by default** since it is a provable no-op on uniform-length input. Measured on A100-40GB, 2048 sources
 of length 28-283, batch 64, with model load timed separately:
 
 | | generation only | wall | decode steps executed |

@@ -240,3 +240,23 @@ class TestLengthBucketing:
         lengths = [313, 44, 902, 44, 155, 313]
         assert (token_budget_batches(lengths, max_tokens=2048)
                 == token_budget_batches(lengths, max_tokens=2048))
+
+    def test_packing_is_a_noop_on_uniform_lengths(self):
+        """Why pack_by_length can default to True for generation.
+
+        The sort key is (length, index), so when every source is the same length
+        it degenerates to index order and yields exactly the fixed-size batches.
+        Identical grouping means identical RNG consumption and bit-identical
+        output — the default only changes behaviour when lengths actually vary.
+        """
+        from protevo.inference import fixed_size_batches, length_sorted_batches
+
+        for n, bs in ((7, 4), (100, 32), (2048, 64)):
+            uniform = [284] * n
+            assert length_sorted_batches(uniform, bs) == fixed_size_batches(n, bs)
+
+    def test_packing_regroups_when_lengths_vary(self):
+        from protevo.inference import fixed_size_batches, length_sorted_batches
+
+        ragged = [28, 283, 50, 200, 31, 275]
+        assert length_sorted_batches(ragged, 2) != fixed_size_batches(6, 2)

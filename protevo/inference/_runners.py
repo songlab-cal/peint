@@ -135,7 +135,7 @@ def generate_sharded(
     use_flash: bool = True,
     base_seed: int = 0,
     autocast: bool = True,
-    pack_by_length: bool = False,
+    pack_by_length: bool = True,
 ) -> List[str]:
     """Generate one evolved sequence per ``(source, time)`` pair, across all GPUs.
 
@@ -147,16 +147,22 @@ def generate_sharded(
             so changing it changes the sampled output (as it does today).
         num_gpus: Ranks to run. Defaults to every visible GPU.
         max_decode_steps: Defaults to twice the longest source *in each batch*.
-        pack_by_length: Opt-in. Group sources of similar length into a batch
-            instead of taking them in input order. Because a batch runs
-            ``2 * max(source length)`` steps and does not stop until every row has
-            emitted ``<eos>``, mixing lengths makes short sources pay for long
-            ones - so unlike the likelihood-side bucketing, this one attacks
-            sequential work rather than padded FLOPs. **Off by default and it
-            changes the sampled sequences**: batch composition determines which
-            RNG draws each source gets, so output differs (distributionally
-            identical, not element-wise). Results are still returned in the order
-            of ``sources``.
+        pack_by_length: Group sources of similar length into a batch instead of
+            taking them in input order. **On by default**, because a batch runs
+            ``2 * max(source length)`` steps and does not exit until every row has
+            emitted ``<eos>``, so mixing a 28-residue source with a 283-residue one
+            makes the short one pay for the long one. Measured 1.37x on a ragged
+            corpus (unlike the likelihood-side bucketing, which attacks padded
+            positions flash-attention already skips and is worth ~3-5%).
+
+            Safe to default on: the sort key is ``(length, index)``, so on a
+            uniform-length corpus it degenerates to index order and produces
+            *identical* batches - a provable no-op, bit-identical output. It only
+            regroups when lengths actually vary, and there it changes which RNG
+            draws each source gets, so sampled sequences differ (distributionally
+            identical, not element-wise). Pass ``False`` to reproduce a run made
+            before this default changed. Results are returned in the order of
+            ``sources`` either way.
 
     Returns:
         Generated sequences, in the order of ``sources``.

@@ -206,7 +206,10 @@ an extrapolation, not a measurement.
 
 ## Tier 2: length bucketing (opt-in, off by default)
 
-**Two different things share this flag, and they behave oppositely.** On
+**Defaults differ by workload, because the two behave oppositely.** Generation
+packs by default; likelihood and homology do not.
+
+ On
 *likelihood/homology* it buys ~3-5% and nothing respectively - not worth enabling.
 On *generation over a ragged corpus* it is worth **1.37x** and should be on. The
 difference is what the waste consists of: padded positions, which flash-attention

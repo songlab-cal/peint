@@ -69,8 +69,11 @@ def main() -> None:
     ap.add_argument("--length-jitter", type=float, default=0.0,
                     help="Ragged-length fraction for the synthetic corpus")
     ap.add_argument("--corpus-seed", type=int, default=0)
-    ap.add_argument("--pack-by-length", action="store_true",
-                    help="Tier-2: length-bucketed batching (not bit-exact)")
+    ap.add_argument("--pack-by-length", action=argparse.BooleanOptionalAction,
+                    default=None,
+                    help=("Length-bucketed batching. Default follows the library: "
+                          "on for generation (1.37x on ragged corpora), off for "
+                          "likelihood/homology. --no-pack-by-length forces it off."))
     ap.add_argument("--max-tokens", type=int, default=None,
                     help="Padded-position budget per batch when --pack-by-length is set")
     ap.add_argument("--num-gpus", type=int, default=1,
@@ -108,7 +111,7 @@ def main() -> None:
         "num_gpus": args.num_gpus,
         "measured_peak_bf16_tflops": peak_tflops,
         "measured_peak_hbm_gbs": peak_gbs,
-        "pack_by_length": args.pack_by_length,
+        "pack_by_length": args.pack_by_length,   # None = per-workload default
         "max_tokens": args.max_tokens,
         "workload": args.workload,
         "mode": args.mode,
@@ -212,7 +215,9 @@ def main() -> None:
         for bs in batch_sizes:
             run, info = workloads.bulk_generation_callable(
                 checkpoint, srcs, times, batch_size=bs,
-                num_gpus=args.num_gpus, pack_by_length=args.pack_by_length,
+                num_gpus=args.num_gpus,
+                pack_by_length=(True if args.pack_by_length is None
+                                else args.pack_by_length),
                 use_flash=use_flash,
             )
             # Sharded ranks allocate in their own processes; one timed pass only,
@@ -225,7 +230,7 @@ def main() -> None:
             row["tok_per_s"] = info["decode_steps_paid"] / secs
             rows.append(row)
             print(f"[run_workload] generate_bulk n={len(srcs)} bs={bs} "
-                  f"gpus={args.num_gpus} pack={args.pack_by_length}: "
+                  f"gpus={args.num_gpus} pack={info['pack_by_length']}: "
                   f"{secs:.1f} s, {row['seq_per_s']:.1f} seq/s, "
                   f"decode-step waste {info['decode_step_waste']*100:.0f}%")
 
