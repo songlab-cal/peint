@@ -26,8 +26,9 @@
 
 set -euo pipefail
 
-source /usr/local/linux/miniforge-3.13/etc/profile.d/conda.sh
-conda activate prot-evo
+# Auto-stages onto node-local NVMe on NFSv4.2 nodes, otherwise uses the shared
+# env. Exports $PY. Replaces `conda activate`, which itself stalls on those nodes.
+source /scratch/users/yufan.cao/peint-dev/rebuttal/peint-fast/benchmarks/staging/stage_env.sh
 
 export TORCH_HOME=/scratch/users/yufan.cao/torch_cache
 export HF_HOME=/scratch/users/yufan.cao/hf-cache
@@ -50,14 +51,14 @@ WORKLOADS=$(echo "$WORKLOADS" | tr ' ' ',')
 OUT=${OUT:-results/parity_tier${TIER}.json}
 
 echo "Host: $(hostname)  TIER: $TIER  WORKLOADS: $WORKLOADS"
-python -c "import torch; assert torch.cuda.is_available(); \
+"$PY" -c "import torch; assert torch.cuda.is_available(); \
 print('CUDA ok:', torch.cuda.get_device_name(0), torch.cuda.get_device_capability(0))"
 
 BASELINE_REPO=${BASELINE_REPO:-../peint}
 FAST_REPO=${FAST_REPO:-.}
 
 echo "===== 1/2 parity: optimized vs pristine ====="
-python benchmarks/inference/parity.py \
+"$PY" benchmarks/inference/parity.py \
   --baseline-repo "$BASELINE_REPO" \
   --fast-repo "$FAST_REPO" \
   --workloads "$WORKLOADS" \
@@ -73,9 +74,9 @@ elif [ "$(readlink -f "$BASELINE_REPO")" = "$(readlink -f "$FAST_REPO")" ]; then
   echo "===== 2/2 golden fixture: SKIPPED (both sides are the same tree) ====="
 else
   echo "===== 2/2 golden fixture: both precision paths ====="
-  python benchmarks/inference/golden_check.py \
+  "$PY" benchmarks/inference/golden_check.py \
     --baseline-repo "$BASELINE_REPO" --fast-repo "$FAST_REPO"
-  python benchmarks/inference/golden_check.py \
+  "$PY" benchmarks/inference/golden_check.py \
     --baseline-repo "$BASELINE_REPO" --fast-repo "$FAST_REPO" --no-flash
 fi
 

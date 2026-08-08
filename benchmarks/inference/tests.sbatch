@@ -15,8 +15,9 @@
 
 set -uo pipefail
 
-source /usr/local/linux/miniforge-3.13/etc/profile.d/conda.sh
-conda activate prot-evo
+# Auto-stages onto node-local NVMe on NFSv4.2 nodes, otherwise uses the shared
+# env. Exports $PY. Replaces `conda activate`, which itself stalls on those nodes.
+source /scratch/users/yufan.cao/peint-dev/rebuttal/peint-fast/benchmarks/staging/stage_env.sh
 
 export TORCH_HOME=/scratch/users/yufan.cao/torch_cache
 export HF_HOME=/scratch/users/yufan.cao/hf-cache
@@ -31,7 +32,7 @@ mkdir -p "$TMPDIR" "$XDG_CACHE_HOME"
 cd /scratch/users/yufan.cao/peint-dev/rebuttal/peint-fast
 
 echo "Host: $(hostname)"
-python -c "import torch; print('CUDA:', torch.cuda.get_device_name(0), torch.cuda.get_device_capability(0))"
+"$PY" -c "import torch; print('CUDA:', torch.cuda.get_device_name(0), torch.cuda.get_device_capability(0))"
 
-python -m pytest ${PYTEST_ARGS:-tests/ -q} 2>&1
+"$PY" -m pytest ${PYTEST_ARGS:-tests/ -q} 2>&1
 echo "pytest exit: $?"
