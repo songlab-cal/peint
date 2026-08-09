@@ -2,6 +2,7 @@ from pathlib import Path
 from loguru import logger
 import os
 
+from protevo import caching
 from protevo.vep._vep_utils import PROTEINGYM_DIR, VEP_DATA_DIR
 from protevo.vep.ProteinGym3.proteingym.baselines.SiteRM._datasets import (
     get_dms_substitutions_families,
@@ -55,6 +56,15 @@ def construct_training_dataset_on_dms_msas(
 
 
 def main():
+    # Enable protevo's on-disk caching. It is OFF by default (`_CACHE_DIR` is a
+    # module global that nothing sets otherwise), and `extract_transitions` is a
+    # cache-managed function: with caching on, the wrapper fills in its
+    # alignment-mask / transition-name output dirs (which this builder doesn't
+    # pass) and skips already-completed families on re-runs via `.success` tokens.
+    cache_dir = VEP_DATA_DIR / "_cache_protevo"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    caching.set_cache_dir(str(cache_dir))
+
     families = get_dms_substitutions_families(
         DMS_reference_file_path=PROTEINGYM_DIR
         / "reference_files"
