@@ -449,6 +449,13 @@ tolerance — and almost all of this branch's work is in the Flash variants.
 | Vanilla fp32 | max 2.19e-05, mean 1.41e-06 ✓ within 1e-4 | max 2.19e-05, mean 1.41e-06 ✓ | **0.0** |
 | Flash bf16 | max 0.296, mean 0.0131 | max 0.296, mean 0.0131 | **0.0** |
 
+Measured on A5000. **The distance from the fixture is hardware-dependent** — the
+same check on A100 gives max 0.196 on the Flash path and 1.91e-05 on Vanilla,
+because different architectures select different flash-attn and cuBLAS kernels.
+What is invariant, and what the check actually asserts, is the third column: on
+every GPU tested the optimized tree sits *bit-identically* as close to the fixture
+as the pristine tree does. Do not treat 0.296 as a threshold.
+
 The optimized tree's distance from the fixture is bit-identical to the pristine
 tree's, on both paths. The optimization introduced no drift of its own — which is
 the assertion `golden_check.py` enforces.
