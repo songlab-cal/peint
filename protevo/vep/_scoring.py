@@ -83,6 +83,7 @@ def score_transition_pairs(
             reduction="none",
         ).mean(dim=-1)
 
-        scores.extend(loss.cpu().numpy())
+        # .float(): scores are bf16 for flash/ESM-C backbones, and numpy has no bfloat16.
+        scores.extend(loss.float().cpu().numpy())
 
     return scores
