@@ -194,7 +194,15 @@ def load_esm_model(which_esm: str = "150M", use_flash: bool = True) -> Tuple[obj
         raise ValueError(
             f"Unknown encoder '{which_esm}'. Options: {sorted(ESM_REGISTRY)}"
         )
-    if "hf_repo" in ESM_REGISTRY[which_esm]:
+    spec = ESM_REGISTRY[which_esm]
+    # Biohub ESM-C: delegate to the protevo registry's builder (single source of truth),
+    # returning the (encoder, vocab) pair this function contracts.
+    if spec.get("backbone") == "esmc-biohub":
+        from protevo.models._esmc_biohub import build_esmc_biohub_backbone
+
+        module, vocab, _ = build_esmc_biohub_backbone("esmc-biohub", use_flash=use_flash)
+        return module, vocab
+    if "hf_repo" in spec:
         return _load_vesm(which_esm, use_flash=use_flash)
     return _load_stock_esm(which_esm, use_flash=use_flash)
 

@@ -112,6 +112,9 @@ ESM_REGISTRY = {
         "hf_repo": "ntranoslab/vesm",
         "hf_file": "VESM_650M.pth",
     },
+    # Biohub ESM-C (transformers) — a separate base-LM. load_esm_model delegates to
+    # protevo.models._esmc_biohub.build_esmc_biohub_backbone; needs the transformers fork.
+    "esmc-biohub": {"backbone": "esmc-biohub", "embed_dim": 960},
 }
 
 # Local staging dir for downloaded encoder weights (on shared /scratch, so SLURM compute
@@ -121,4 +124,4 @@ ENCODER_STAGING_DIR = VEP_DATA_DIR / "encoders"
 # Convenience: encoder key -> embed_dim, and the reverse map used by load_model when a
 # checkpoint only records embed_dim (stock ESM sizes are unambiguous by embed_dim).
 EMBED_DIM = {k: v["embed_dim"] for k, v in ESM_REGISTRY.items()}
-EMBED_DIM_TO_ESM = {640: "150M", 1280: "650M", 2560: "3B", 5120: "15B"}
+EMBED_DIM_TO_ESM = {640: "150M", 1280: "650M", 2560: "3B", 5120: "15B", 960: "esmc-biohub"}

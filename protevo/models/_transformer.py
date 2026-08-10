@@ -46,6 +46,17 @@ DEFAULT_MAX_SEQ_LEN = 1022  # ESM2's max sequence length minus special tokens
 STANDARD_STATES = list(amino_acids) + ['<eos>']
 
 
+def _is_esmc_biohub_backbone(module) -> bool:
+    """True if ``module`` is a Biohub ESM-C model (transformers ``ESMCForMaskedLM``).
+
+    Detected by class name so transformers need not be imported to check an ESM2 backbone.
+    ESM-C is flash-native, so PEINT uses it frozen as-is (no ESM2Flash-style re-wrap) and
+    just stacks its own encoder/decoder layers on top; only the embedding / head /
+    representation access differs from ESM2 (see the dispatch in the base class).
+    """
+    return type(module).__name__ == "ESMCForMaskedLM"
+
+
 def _config_from_kwargs(
     embed_dim: int,
     num_heads: int,
@@ -136,9 +147,16 @@ class _PeintTransformerBase(nn.Module, ABC):
             ignore_index=self.vocab.padding_idx
         )
 
-        # Token embeddings (initialized from ESM, frozen)
-        self.embedding = nn.Embedding(len(self.vocab), embed_dim)
-        self.embedding.load_state_dict(self.esm.embed_tokens.state_dict())
+        # Token embeddings (initialized from the frozen backbone). ESM2 exposes
+        # `embed_tokens`; biohub ESM-C (transformers) exposes it at `esmc.embed`.
+        self._is_esmc_biohub = _is_esmc_biohub_backbone(self.esm)
+        if self._is_esmc_biohub:
+            assert embed_dim == 960, "Biohub ESM-C requires embed_dim=960 (ESMC-300M)."
+            self.embedding = nn.Embedding(self.esm.esmc.embed.weight.shape[0], embed_dim)
+            self.embedding.load_state_dict(self.esm.esmc.embed.state_dict())
+        else:
+            self.embedding = nn.Embedding(len(self.vocab), embed_dim)
+            self.embedding.load_state_dict(self.esm.embed_tokens.state_dict())
         self.embedding.requires_grad_(False)
 
         # Time embedding
@@ -148,13 +166,18 @@ class _PeintTransformerBase(nn.Module, ABC):
         self.enc_layers = self._create_encoder_layers()
         self.dec_layers = self._create_decoder_layers()
 
-        # Language model head (initialized from ESM, frozen)
-        self.lm_head = RobertaLMHead(
-            embed_dim=self.embed_dim,
-            output_dim=len(self.vocab),
-            weight=self.embedding.weight
-        )
-        self.lm_head.load_state_dict(self.esm.lm_head.state_dict())
+        # Language model head (frozen). ESM2 uses a RobertaLMHead tied to the token
+        # embedding; biohub ESM-C brings its own 64-wide head module (model.lm_head),
+        # which we reuse directly so the decoder predicts over the same 64-wide space.
+        if self._is_esmc_biohub:
+            self.lm_head = self.esm.lm_head
+        else:
+            self.lm_head = RobertaLMHead(
+                embed_dim=self.embed_dim,
+                output_dim=len(self.vocab),
+                weight=self.embedding.weight
+            )
+            self.lm_head.load_state_dict(self.esm.lm_head.state_dict())
         self.lm_head.requires_grad_(False)
 
     @abstractmethod
@@ -176,6 +199,13 @@ class _PeintTransformerBase(nn.Module, ABC):
         Returns:
             Final hidden state from ESM [B, L, D]
         """
+        if self._is_esmc_biohub:
+            # Biohub ESM-C (transformers, flash-native): pass an explicit padding mask;
+            # hidden_states[-1] is the final transformer-layer output (before the LM head),
+            # i.e. the encoder representation [B, L, 960].
+            attn_mask = (x != self.vocab.padding_idx).long()
+            out = self.esm(input_ids=x, attention_mask=attn_mask, output_hidden_states=True)
+            return out.hidden_states[-1]
         res = self.esm(
             x,
             repr_layers=[self.esm.num_layers],

@@ -82,7 +82,11 @@ def load_model(
     model_hparams = dict(sd["hyper_parameters"])
     model_hparams.update(kwargs)
 
-    if any(k.startswith("model.esm.") for k in state_dict):
+    if model_hparams.get("which_esm") == "esmc-biohub" or model_hparams.get("encoder_backbone") == "esmc-biohub":
+        # Biohub ESM-C: rebuild the transformers backbone (its saved encoder weights load
+        # with strict=False below). The ESM2 arch-inference path does not apply.
+        esm_model, vocab = load_esm_model("esmc-biohub", use_flash=use_flash)
+    elif any(k.startswith("model.esm.") for k in state_dict):
         # Full checkpoint: rebuild the scaffold from the checkpoint's own encoder weights.
         num_layers, embed_dim, attention_heads = _infer_esm_arch_from_state_dict(state_dict)
         esm_cls = ESM2Flash if use_flash else ESM2Model

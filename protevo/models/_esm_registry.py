@@ -16,3 +16,13 @@ def get_esm_model(name):
         )
     loader, embed_dim = ESM2_REGISTRY[name]
     return loader, embed_dim
+
+
+# Biohub ESM-C (transformers) — a separate base-LM model, registered here additively.
+# Its loader/vocab live in `_esmc_biohub` and need the Biohub transformers fork (not the
+# `esm` package). Imports there are lazy, so this line pulls no transformers at import time.
+from protevo.models._esmc_biohub import (  # noqa: E402,F401
+    ESMC_BIOHUB_REGISTRY,
+    build_esmc_biohub_backbone,
+    get_esmc_biohub_vocab,
+)
