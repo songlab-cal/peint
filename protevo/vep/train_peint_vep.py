@@ -47,7 +47,7 @@ def main():
 
     # Set up logger
     logger = pl.pytorch.loggers.wandb.WandbLogger(
-        name=run_name, project="protein-evolution", entity="junhaobearxiong"
+        name=run_name, project="protein-evolution", entity="antoinekoehl"
     )
 
     # Load ESM model
