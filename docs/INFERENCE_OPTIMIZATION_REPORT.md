@@ -1,7 +1,7 @@
 # PEINT inference optimization — implementation report
 
 Branch `inference-speedup`, worktree `rebuttal/peint-fast/`, branched from
-`referee3-ablations @ 4d7354a`. Nine commits. No retraining; the released
+`referee3-ablations @ 4d7354a`. 21 commits. No retraining; the released
 `peint.ckpt` is unchanged and every default-path number it produces is unchanged.
 
 ---
@@ -96,7 +96,7 @@ Likelihood at batch 128, same workload on all three cards:
 
 The baseline barely moves across hardware (5435 → 3656 ms, only 1.49× from A5000
 to H200) while the optimized path scales 3.67×. That is direct confirmation of the
-diagnosis in §3: the baseline was **CPU-bound on Python tokenization**, so a faster
+diagnosis in §2: the baseline was **CPU-bound on Python tokenization**, so a faster
 GPU could not help it. Removing that bottleneck is what lets the hardware matter —
 and it means the win is largest on exactly the cards you would deploy on.
 
@@ -114,7 +114,100 @@ The 4-GPU hit list is identical to the 1-GPU one across 14 280 hits.
 
 ---
 
-## 2. Reproducing any of it
+## 2. What was optimized
+
+### The three that mattered most
+
+**1. Vectorized tokenization** — the largest win, and it was on the CPU.
+`evaluate_likelihood` called fair-esm's `Alphabet.encode` (~2 ms/sequence, pure
+Python) on the *entire* query set **once per reference**, making homology
+all-vs-all O(N^2) in Python before touching a GPU. `PeintDataset` had already
+solved this with a 256-entry char->id table; `protevo/inference/_tokenize.py`
+lifts it out so both share one implementation. At 2048 targets that is ~4 s of
+Python per call, almost exactly what disappeared. It is also why the speedup
+*grows* with GPU speed (2.81x on A5000 -> 6.95x on H200): the baseline was
+CPU-bound, so a faster card could not help it.
+
+**2. Halved activation memory, which buys batch size.** Batch is the dominant
+throughput lever (7.3x measured, 64 -> 1024). On a 40 GB A100 the baseline
+plateaus near 46 seq/s and **OOMs at 1024**, while the optimized path reaches 768
+and 151 seq/s. Memory *is* throughput when memory is the cap.
+
+**3. Cross-attention K/V caching.** The encoder memory and its padding mask are
+fixed for a whole `generate()` call, yet `unpad_input` re-gathered the entire
+`[B, L_enc, 2, H, hd]` cache **per layer per token**, each call paying a
+`.max().item()` device sync. Prefill now caches the unpadded K/V plus its varlen
+metadata.
+
+### Bit-exact (Tier 1) — decode loop
+
+| change | what it removed |
+|---|---|
+| cache unpadded encoder K/V + `cu_seqlens`/`max_seqlen` at prefill | O(B*L_enc) gather + 1 sync, per layer per token |
+| build single-token query unpad metadata directly | 1 more sync per layer per token (it is an identity gather) |
+| allocate KV caches in the **compute dtype** | a full dtype-converted copy of the cache, per layer per token |
+| pass `max_seqlen` to `rot_emb` in `KVCached_MHSA` | full RoPE cos/sin table rebuild, every token, every layer |
+| `register_buffer` the time-embedder frequency grid | `np.geomspace` + H2D copy on every forward |
+| keep `zero_idx` on device | H2D copy of the ban-list index per token |
+| check `eos_reached.all()` every `EOS_CHECK_INTERVAL=16` steps | a GPU->CPU sync per token |
+| drop the final decoder pass | one full decoder forward whose logits were discarded |
+| `reset_kv_cache` stops `zero_()`-ing | a full-buffer memset per layer per reset |
+| `decode_sequences` does one `.cpu().tolist()` | ~38k individual `.item()` syncs at B=64, L=600 |
+| skip the ESM2 backbone's LM head | a `[B, L, 640]` LN + 640->640 dense + gelu + tied 640->33, discarded |
+| size the cross-attn cache to the real source length | ~1.7 GB of over-allocation at B=64 |
+
+### Bit-exact (Tier 1) — likelihood / homology
+
+- shared LUT tokenizer; `evaluate_likelihood` accepts pre-tokenized targets
+- upload the source once via `expand` instead of B host-side copies per batch
+- tokenize the homology corpus once rather than once per reference
+- hoist per-proteome query-set construction out of the per-reference loop
+- `HomologySearcher.write_results` -> `staticmethod`, so the sharded CLI can
+  serialize results without constructing a searcher and occupying GPU 0
+
+### Parallelism
+
+`protevo/inference/_shard.py` fans work out over a node's GPUs with plain process
+spawn — **no DDP, no NCCL**, since none of these workloads needs gradient sync.
+Each rank loads the checkpoint itself, which is exactly what the package's two
+existing attempts could not do: `simulation/_simulate_on_tree.py` and
+`time_mle/t_mle.py` both hand a live CUDA `nn.Module` to `multiprocessing.Pool`,
+which works under neither fork nor spawn — so in practice every inference workload
+had been single-GPU.
+
+Output is independent of GPU count *by construction*: results merge in original
+item order, items are seeded by index rather than rank, and generation shards over
+pre-chunked batches so batch composition cannot shift. `_runners.py` exposes
+`generate_sharded`, `score_targets_sharded`, `all_vs_all_sharded` and
+`all_vs_all_proteomes_sharded`; the homology CLI gains `--num-gpus`.
+
+### Length binning — same flag, opposite verdicts
+
+The waste differs by workload, so the defaults do too:
+
+| workload | waste consists of | measured | default |
+|---|---|---|---|
+| generation | **sequential decode steps**, which nothing skips | **1.37x** | **on** |
+| likelihood | padded positions flash-attention already unpads | 3-5% | off |
+| homology | same | none | off |
+
+Safe to default on for generation because it is a provable no-op otherwise: the
+sort key is `(length, index)`, so on uniform-length input it degenerates to index
+order and yields identical batches, hence identical RNG consumption and
+bit-identical output.
+
+### Deliberately not done
+
+No `torch.compile`, no TF32 / `set_float32_matmul_precision`, no quantization, and
+no autocast added where the documented path ran fp32 — each trades exactness for
+speed, and this branch's whole premise is that the released checkpoint's numbers
+do not move. CUDA graphs were demoted once the corrected bandwidth metric showed
+the loop is KV-bound rather than overhead-bound: they target per-step launch
+overhead, worth <=15% here and mostly latency rather than throughput.
+
+---
+
+## 3. Reproducing any of it
 
 Everything runs under SLURM — the checkpoint is 219 MB and the model is 150M
 parameters, so none of it belongs on a login node.
@@ -143,7 +236,7 @@ take space-separated lists and convert them.
 
 ---
 
-## 3. Commit-by-commit walkthrough
+## 4. Commit-by-commit walkthrough
 
 ### `4cccba7` — Inference benchmark + Tier-1 parity harness
 *6 files, +957*
@@ -331,11 +424,11 @@ the same length and bucketing is a no-op).
 ### `f9fa9ee` — Measure Tier-2; correct two claims it disproved
 *4 files, +99 / −17*
 
-See §5.
+See §6.
 
 ---
 
-## 4. All measurements in one place
+## 5. All measurements in one place
 
 ### Generation — `PeintGenerator.generate`, source length 284, 568 decode steps
 
@@ -559,7 +652,7 @@ why CUDA graphs would mostly help *latency* rather than throughput.
 tok/s are reported: seq/s is the goal, tok/s makes runs at different sequence
 lengths comparable.
 
-## 5. Predictions the measurements disproved
+## 6. Predictions the measurements disproved
 
 Recorded because they are the useful part.
 
@@ -599,7 +692,7 @@ is now a comment so nobody re-derives it.
 
 ---
 
-## 6. Not done
+## 7. Not done
 
 - **Classical-simulator rows for the referee's efficiency table.** Blocked:
   `protevo/simulation/_alisim.py` shells out to an `iqtree2` binary, the submodule
@@ -622,7 +715,7 @@ is now a comment so nobody re-derives it.
 - **Batch-ceiling and throughput-per-compute measured on A100-40GB and H200
   only.** A5000 was swept to batch 64 only, so its ceiling is unknown.
 - **Multi-GPU scaling measured on A5000 only.** The single-GPU numbers now cover
-  A5000, A100 and H200, but the sharding study (§4) is A5000. The ~15 s per-rank
+  A5000, A100 and H200, but the sharding study (§5) is A5000. The ~15 s per-rank
   model load is largely CPU-side, so the crossover point should be similar; the
   compute half of the trade shrinks on faster cards, which would push the
   crossover to *larger* work lists, not smaller.
