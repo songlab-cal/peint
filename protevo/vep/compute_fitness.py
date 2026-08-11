@@ -12,6 +12,25 @@ from protevo.vep._vep_utils import PROTEINGYM_DIR, VEP_DATA_DIR, load_model
 from protevo.vep._scoring import score_transition_pairs
 
 
+def _dms_subs_folder():
+    """Folder of per-assay DMS substitution CSVs.
+
+    The vendored ProteinGym3 copy can be permission-restricted (its inner
+    ``DMS_ProteinGym_substitutions`` symlinks into another user's private dir);
+    set ``VEP_DMS_SUBS_DIR`` to a readable mirror to override.
+    """
+    env = os.environ.get("VEP_DMS_SUBS_DIR")
+    if env:
+        return Path(env)
+    return (
+        PROTEINGYM_DIR
+        / "input_data"
+        / "ProteinGym_v1.3"
+        / "DMS_ProteinGym_substitutions"
+        / "DMS_ProteinGym_substitutions"
+    )
+
+
 def evaluate_vep_for_family(
     family,
     data_path,
@@ -76,13 +95,7 @@ def create_wag_corrected_score_files(
     DMS_reference_file_path = (
         PROTEINGYM_DIR / "reference_files" / "DMS_substitutions.csv"
     )
-    DMS_data_folder = (
-        PROTEINGYM_DIR
-        / "input_data"
-        / "ProteinGym_v1.3"
-        / "DMS_ProteinGym_substitutions"
-        / "DMS_ProteinGym_substitutions"
-    )
+    DMS_data_folder = _dms_subs_folder()
 
     # Make clinical replacements if needed
     if clinical:
@@ -199,13 +212,7 @@ def create_peint_score_files(
         DMS_reference_file_path = (
             PROTEINGYM_DIR / "reference_files" / "DMS_substitutions.csv"
         )
-        DMS_data_folder = (
-            PROTEINGYM_DIR
-            / "input_data"
-            / "ProteinGym_v1.3"
-            / "DMS_ProteinGym_substitutions"
-            / "DMS_ProteinGym_substitutions"
-        )
+        DMS_data_folder = _dms_subs_folder()
 
         # Make clinical replacements if needed
         if clinical:
@@ -506,6 +513,12 @@ if __name__ == "__main__":
         help="Evaluate on indels data instead of substitutions",
     )
     parser.add_argument(
+        "--score_only",
+        action="store_true",
+        help="Skip model loading and evaluation; rebuild score files and "
+        "per-assay Spearman from existing *_preds.txt (recovery / rescore).",
+    )
+    parser.add_argument(
         "--output_suffix",
         type=str,
         default=None,
@@ -598,28 +611,34 @@ if __name__ == "__main__":
             print(f"Processing checkpoint: {ckpt_path}")
             print(f"Output directory: {output_subdir}")
 
-            # Load model (FlashAttention on GPU, standard PyTorch encoder on CPU)
-            model, vocab = load_model(
-                model_checkpoint_path=str(ckpt_path),
-                device=device,
-                use_flash=(device.type == "cuda"),
-            )
-
-            # Evaluate each family
-            for j, family in enumerate(families):
+            if args.score_only:
                 print(
-                    f"Evaluating model on: {family} ({j + 1} / {len(families)}) with peint model"
+                    "score_only: skipping model load + evaluation; rebuilding "
+                    "score files and Spearman from existing *_preds.txt"
                 )
-                retcode = evaluate_vep_for_family(
-                    family,
-                    str(data_dir),
-                    str(output_subdir),
-                    model,
-                    device,
-                    vocab,
-                    batch_size=args.batch_size,
-                    t=t,
+            else:
+                # Load model (FlashAttention on GPU, standard PyTorch encoder on CPU)
+                model, vocab = load_model(
+                    model_checkpoint_path=str(ckpt_path),
+                    device=device,
+                    use_flash=(device.type == "cuda"),
                 )
+
+                # Evaluate each family
+                for j, family in enumerate(families):
+                    print(
+                        f"Evaluating model on: {family} ({j + 1} / {len(families)}) with peint model"
+                    )
+                    retcode = evaluate_vep_for_family(
+                        family,
+                        str(data_dir),
+                        str(output_subdir),
+                        model,
+                        device,
+                        vocab,
+                        batch_size=args.batch_size,
+                        t=t,
+                    )
 
             # Create scores directory and generate score files
             output_scores_folder = output_subdir / "scores"
