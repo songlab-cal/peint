@@ -512,6 +512,47 @@ prediction from `decode_step_waste`, which assumes each batch runs the full
 
 Homology N=200 at jitter 0.5: 53.4 s both ways — no difference.
 
+### Parameter counts and training cost
+
+Closed by the `efficiency-report` session and cross-checked here; the referee-facing
+write-up is `docs/EFFICIENCY_SUMMARY.md`.
+
+**Parameters at inference — 205.61 M total, 28% of it trained:**
+
+| component | params | shipped in the checkpoint? |
+|---|---|---|
+| ESM2-150M backbone (frozen) | 148.16 M | no — fair-esm downloads it |
+| ...of which the LM head this branch skips | 0.43 M | — |
+| PEINT layers (5 enc x 4.924 M + 5 dec x 6.566 M) | **57.45 M** | yes |
+| **total at inference** | **205.61 M** | |
+
+`vep.ckpt` is 22.98 M (2 enc + 2 dec) -> 171.14 M total.
+
+Verified directly from `peint.ckpt`: `state_dict` sums to **57,446,400** parameters
+and `optimizer_states` is absent, so the 229 854 484 B file is fp32 weights only —
+disk size is a clean proxy for the trained artefact, which is *not* generally true
+of Lightning checkpoints.
+
+**Training cost of the released checkpoint: ~89 GPU-h (~3.7 GPU-days).** Derived
+from the A0 baseline reproduction (`protevo_ablations/baseline/`, job 3365814),
+which checkpoints on a metronome: 4 000 steps per 3 h 56 min on 2x A100-40GB =
+1 017 steps/h = **1.97 GPU-h per 1 000 steps** (2.22 including validation), at
+217 seq/s across both cards.
+
+**Do not write "300k steps" in the response.** `peint.ckpt` reports
+`global_step=40000, epoch=2` — verified by loading it — and the reproduction's
+`epoch=2-step=40000.ckpt` matches, which is what makes the rate a legitimate proxy.
+The 300 000 in `num_training_steps` is only the LR-schedule horizon; quoting it as
+training length would overstate cost 7.5x (~665 GPU-h). Note also that
+`rebuttal/CLAUDE.md` lists "~300k steps" among the reference hyperparameters, and
+its `lr` of 3e-4 disagrees with the 4e-4 that `train_peint_model.sh` passes.
+
+**Classical simulators remain unmeasured and blocked** (see §7). For a parameter
+comparison that needs no timing: WAG/LG are 190 exchangeabilities + 19 free
+frequencies = **208 parameters**, fixed; mixture models reach O(10^2-10^4). Against
+205.61 M that is a ~10^5x parameter trade rather than a win, which is the more
+defensible framing for a referee.
+
 ### Correctness
 
 | check | result |
@@ -701,9 +742,7 @@ is now a comment so nobody re-derives it.
   `simulation/classical.py` on the same trees. Note the result is CPU wall-clock
   and must be labelled as such — it is not comparable to a GPU throughput figure
   without stating core count.
-- **Training cost** for the same table — recoverable from the ablation logs under
-  `/scratch/users/yufan.cao/protevo_ablations/logs/` (768 sequences/step × 60k
-  steps at the recorded GPU-hours), not from anything measured here.
+- ~~**Training cost**~~ — **closed**: ~89 GPU-h for the released checkpoint. See §5.
 - **Continuous batching for generation.** The decode loop still runs until *every*
   row emits `<eos>`, so one long sequence pays for the whole batch. Listed in the
   original plan under Tier-2; given how little length bucketing bought, worth
