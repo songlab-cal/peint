@@ -112,7 +112,9 @@ def load_peint_model(
     model_type: str = 'generator',
     use_flash: bool = True,
     strict_loading: bool = False,
-    map_location: Optional[str] = None
+    map_location: Optional[str] = None,
+    max_encoder_seq_len: Optional[int] = None,
+    max_decoder_seq_len: Optional[int] = None
 ) -> Tuple[nn.Module, Alphabet]:
     """
     Load a PEINT model from checkpoint, automatically detecting checkpoint type.
@@ -185,54 +187,66 @@ def load_peint_model(
 
     state_dict = ckpt['state_dict']
 
-    # Detect checkpoint type
-    is_peint_only = _is_peint_only_checkpoint(state_dict)
+    # Detect the frozen encoder backbone. Biohub ESM-C checkpoints record encoder_backbone
+    # in {"esmc", "esmc-biohub"} (the esm3-package / VEP names); everything else is ESM2.
+    # ESM-C is flash-native and brings its own backbone + 64-wide vocab, so it is built here
+    # rather than via the ESM2 pretrained/scaffold paths. Its saved encoder/embedding/lm_head
+    # weights load with strict=False below (they equal the biohub ESMC-300M weights in bf16),
+    # leaving the freshly built backbone in place.
+    is_esmc = (
+        hyper_params.get("encoder_backbone") in ("esmc", "esmc-biohub")
+        or hyper_params.get("which_esm") == "esmc-biohub"
+    )
 
-    if is_peint_only:
-        logger.info("Detected PEINT-only checkpoint (ESM parameters not included)")
-        logger.info("Loading ESM2 from pretrained model...")
+    # Whether the checkpoint omits encoder weights (used later when reporting missing keys).
+    # ESM-C checkpoints ship a full backbone under model.esm.*, so they are never PEINT-only.
+    is_peint_only = False if is_esmc else _is_peint_only_checkpoint(state_dict)
+
+    if is_esmc:
+        logger.info("Detected Biohub ESM-C checkpoint; building the transformers ESM-C backbone")
+        from protevo.models._esmc_biohub import build_esmc_biohub_backbone
+        esm_model, vocab, _ = build_esmc_biohub_backbone(
+            "esmc-biohub", use_flash=use_flash and FLASH_AVAILABLE
+        )
     else:
-        logger.info("Detected full checkpoint (includes ESM parameters)")
-
-    # Load or create ESM model
-    if is_peint_only:
-        # Load ESM from pretrained
-        esm_model = _load_esm_model(use_flash=use_flash and FLASH_AVAILABLE)
-    else:
-        # Create ESM model structure (weights will be loaded from checkpoint)
-        # We need to create the model with the right architecture
-        logger.info("Creating ESM model structure for full checkpoint")
-
-        # Get architecture info
-        temp_esm, _ = esm.pretrained.esm2_t30_150M_UR50D()
-
-        if use_flash and FLASH_AVAILABLE:
-            logger.info("Using Flash ESM model")
-            esm_model = ESM2Flash(
-                num_layers=temp_esm.num_layers,
-                embed_dim=temp_esm.embed_dim,
-                attention_heads=temp_esm.attention_heads,
-                alphabet='ESM-1b',
-                token_dropout=True,
-                dropout_p=0.0
-            )
+        if is_peint_only:
+            logger.info("Detected PEINT-only checkpoint (ESM parameters not included)")
+            logger.info("Loading ESM2 from pretrained model...")
+            esm_model = _load_esm_model(use_flash=use_flash and FLASH_AVAILABLE)
         else:
-            logger.info("Using standard ESM model")
-            from protevo.models._flash_esm import ESM2Model
-            esm_model = ESM2Model(
-                num_layers=temp_esm.num_layers,
-                embed_dim=temp_esm.embed_dim,
-                attention_heads=temp_esm.attention_heads,
-                alphabet='ESM-1b',
-                token_dropout=True,
-                dropout_p=0.0
-            )
+            # Create ESM model structure (weights will be loaded from checkpoint)
+            logger.info("Detected full checkpoint (includes ESM parameters)")
+            logger.info("Creating ESM model structure for full checkpoint")
 
-        del temp_esm
-        # ESM weights will be loaded from checkpoint via model.load_state_dict() below
+            temp_esm, _ = esm.pretrained.esm2_t30_150M_UR50D()
 
-    # Create vocabulary
-    vocab = Alphabet.from_architecture("ESM-1b")
+            if use_flash and FLASH_AVAILABLE:
+                logger.info("Using Flash ESM model")
+                esm_model = ESM2Flash(
+                    num_layers=temp_esm.num_layers,
+                    embed_dim=temp_esm.embed_dim,
+                    attention_heads=temp_esm.attention_heads,
+                    alphabet='ESM-1b',
+                    token_dropout=True,
+                    dropout_p=0.0
+                )
+            else:
+                logger.info("Using standard ESM model")
+                from protevo.models._flash_esm import ESM2Model
+                esm_model = ESM2Model(
+                    num_layers=temp_esm.num_layers,
+                    embed_dim=temp_esm.embed_dim,
+                    attention_heads=temp_esm.attention_heads,
+                    alphabet='ESM-1b',
+                    token_dropout=True,
+                    dropout_p=0.0
+                )
+
+            del temp_esm
+            # ESM weights will be loaded from checkpoint via model.load_state_dict() below
+
+        # ESM2 vocabulary (ESM-C set its own vocab above)
+        vocab = Alphabet.from_architecture("ESM-1b")
 
     # Select model class based on Flash Attention and model type
     if use_flash and FLASH_AVAILABLE:
@@ -254,12 +268,34 @@ def load_peint_model(
         logger.info("Using PeintTransformerVanilla (Standard)")
         model_class = PeintTransformerVanilla
 
+    # PeintLightningModule saved max_seq_len + optimizer-only hparams. ESM-C checkpoints come
+    # from that trainer, so map/drop those keys for the plain module constructor; ESM2
+    # checkpoints keep their existing (working) kwargs untouched.
+    if is_esmc:
+        model_kwargs = dict(hyper_params)
+        if "max_seq_len" in model_kwargs:
+            model_kwargs["max_len"] = model_kwargs.pop("max_seq_len")
+        for _k in ("lr", "lora_lr", "num_warmup_steps", "num_training_steps", "which_esm"):
+            model_kwargs.pop(_k, None)
+    else:
+        model_kwargs = hyper_params
+
+    # Optionally resize the encoder/decoder positional caches (KV cache + RoPE) so long
+    # sequences do not overrun the default 1024-wide buffers during generation. The decoder
+    # generates up to 2*root tokens, so simulation passes a decoder length sized to that.
+    if max_encoder_seq_len is not None or max_decoder_seq_len is not None:
+        model_kwargs = dict(model_kwargs)
+        if max_encoder_seq_len is not None:
+            model_kwargs["max_encoder_seq_len"] = max_encoder_seq_len
+        if max_decoder_seq_len is not None:
+            model_kwargs["max_decoder_seq_len"] = max_decoder_seq_len
+
     # Create model instance
     try:
         model = model_class(
             esm_model=esm_model,
             esm_vocab=vocab,
-            **hyper_params
+            **model_kwargs
         )
     except Exception as e:
         raise RuntimeError(f"Failed to create model: {e}")
@@ -324,7 +360,9 @@ def load_model(
     model_checkpoint_path: str,
     use_cached_model: bool,
     device: torch.device,
-    use_flash: bool = FLASH_AVAILABLE
+    use_flash: bool = FLASH_AVAILABLE,
+    max_encoder_seq_len: Optional[int] = None,
+    max_decoder_seq_len: Optional[int] = None
 ) -> Tuple[nn.Module, Alphabet]:
     """
     Legacy interface for loading PEINT models.
@@ -336,6 +374,9 @@ def load_model(
         model_checkpoint_path: Path to checkpoint file
         use_cached_model: If True, use cached decoder variant (generator)
         device: Device to load model onto
+        max_encoder_seq_len / max_decoder_seq_len: Optional overrides for the positional
+            cache sizes (see load_peint_model); needed when generating sequences longer than
+            the model's default 1024-wide decoder cache.
 
     Returns:
         Tuple of (model, vocabulary)
@@ -344,5 +385,7 @@ def load_model(
         checkpoint_path=model_checkpoint_path,
         device=device,
         model_type='generator' if use_cached_model else 'standard',
-        use_flash=use_flash
+        use_flash=use_flash,
+        max_encoder_seq_len=max_encoder_seq_len,
+        max_decoder_seq_len=max_decoder_seq_len
     )

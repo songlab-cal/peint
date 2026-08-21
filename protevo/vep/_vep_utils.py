@@ -82,9 +82,14 @@ def load_model(
     model_hparams = dict(sd["hyper_parameters"])
     model_hparams.update(kwargs)
 
-    if model_hparams.get("which_esm") == "esmc-biohub" or model_hparams.get("encoder_backbone") == "esmc-biohub":
-        # Biohub ESM-C: rebuild the transformers backbone (its saved encoder weights load
-        # with strict=False below). The ESM2 arch-inference path does not apply.
+    # Biohub ESM-C selector. Accept both the VEP name ("esmc-biohub") and the
+    # foundation/ablation-a3-esmc name ("esmc", esm3-package): those checkpoints carry the
+    # same ESMC-300M weights (verified bit-identical in bf16), so both rebuild the biohub
+    # transformers backbone. Its saved encoder weights load with strict=False below; the
+    # ESM2 arch-inference path does not apply.
+    _esmc_backbone_names = ("esmc", "esmc-biohub")
+    if (model_hparams.get("which_esm") in _esmc_backbone_names
+            or model_hparams.get("encoder_backbone") in _esmc_backbone_names):
         esm_model, vocab = load_esm_model("esmc-biohub", use_flash=use_flash)
     elif any(k.startswith("model.esm.") for k in state_dict):
         # Full checkpoint: rebuild the scaffold from the checkpoint's own encoder weights.

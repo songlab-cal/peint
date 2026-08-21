@@ -501,38 +501,53 @@ def simulate_families_with_rejection_sampling_batched(
 
     return simulated, trees, root_sequences, root_labels
 
+def _family_root_length(family_name, root_sequences_dir):
+    """Root sequence length for a family (used to length-sort families before bucketing)."""
+    _, seq = next(iter(read_msa(os.path.join(root_sequences_dir, family_name + ".txt")).items()))
+    return len(seq)
+
+
 def _map_func_simulate_peint_evolution(map_args):
-    msa_dir, tree_dir, root_sequences_dir, families, model, vocab, single_shot, device, n_sequences_to_sample, max_batch_size, nucleus_sampling_p, ratio_rejection_sampling, use_likelihood_filtering, random_seed, output_sequences_dir = map_args
+    (msa_dir, tree_dir, root_sequences_dir, families, model, vocab, single_shot, device,
+     n_sequences_to_sample, max_batch_size, nucleus_sampling_p, ratio_rejection_sampling,
+     use_likelihood_filtering, random_seed, family_bucket_size, output_sequences_dir) = map_args
     _seed_all(random_seed)
 
-    simulated, _, root_seqs, _ = simulate_families_with_rejection_sampling_batched(
-        msa_dir=msa_dir,
-        tree_dir=tree_dir,
-        root_sequences_dir=root_sequences_dir,
-        family_names=families,
-        model=model,
-        vocab=vocab,
-        device=device,
-        single_shot=single_shot,
-        n_sequences_to_sample=n_sequences_to_sample,
-        max_batch_size=max_batch_size,
-        nucleus_sampling_p=nucleus_sampling_p,
-        ratio_rejection_sampling=ratio_rejection_sampling,
-        use_likelihood_filtering=use_likelihood_filtering
-    )
+    # Length-bucket the families: sort by root sequence length, then simulate in buckets of
+    # family_bucket_size. max_decode_steps is set per bucket from its own longest root, so a
+    # short family is not stuck waiting on a long one, while small families still batch
+    # together to keep the GPU busy. (Sorting needs root_sequences_dir; in the MSA-median-root
+    # mode families keep their given order.) Output is written per bucket for incremental
+    # progress on long runs.
+    if root_sequences_dir:
+        families = sorted(families, key=lambda f: _family_root_length(f, root_sequences_dir))
+    buckets = [families[i:i + family_bucket_size] for i in range(0, len(families), family_bucket_size)]
 
-    for family in families:
-        all_seqs = {'root': root_seqs[family]}
-        simulated_seqs = simulated[family]
-        all_seqs.update(simulated_seqs)
-        out_path = os.path.join(output_sequences_dir, family + ".txt")
-
-        write_msa(all_seqs, out_path)
-        secure_parallel_output(output_sequences_dir, family)
+    for bucket in buckets:
+        simulated, _, root_seqs, _ = simulate_families_with_rejection_sampling_batched(
+            msa_dir=msa_dir,
+            tree_dir=tree_dir,
+            root_sequences_dir=root_sequences_dir,
+            family_names=bucket,
+            model=model,
+            vocab=vocab,
+            device=device,
+            single_shot=single_shot,
+            n_sequences_to_sample=n_sequences_to_sample,
+            max_batch_size=max_batch_size,
+            nucleus_sampling_p=nucleus_sampling_p,
+            ratio_rejection_sampling=ratio_rejection_sampling,
+            use_likelihood_filtering=use_likelihood_filtering
+        )
+        for family in bucket:
+            all_seqs = {'root': root_seqs[family]}
+            all_seqs.update(simulated[family])
+            write_msa(all_seqs, os.path.join(output_sequences_dir, family + ".txt"))
+            secure_parallel_output(output_sequences_dir, family)
 
 @protevo_caching.cached_parallel_computation(
     parallel_arg="families",
-    exclude_args=['max_batch_size', 'num_processes'],
+    exclude_args=['max_batch_size', 'family_bucket_size', 'num_processes'],
     exclude_args_if_default=["msa_dir"],
     output_dirs=['output_sequences_dir'],
     write_extra_log_files=True
@@ -547,6 +562,7 @@ def simulate_peint_evolution_down_tree(
     device: torch.device = 'cuda',
     n_sequences_to_sample: int = 4,
     max_batch_size: int = 64,
+    family_bucket_size: int = 32,
     nucleus_sampling_p: float = 1.0,
     ratio_rejection_sampling: float = 0.1,
     use_likelihood_filtering: bool = False,
@@ -560,7 +576,20 @@ def simulate_peint_evolution_down_tree(
     assert msa_dir or root_sequences_dir, "Didn't receive an msa or root sequence directory. There is no way to construct a starting sequence for simulation"
     assert (msa_dir and not root_sequences_dir) or (root_sequences_dir and not msa_dir), "Received both an msa and root sequences directory. Only one may be used to pick a root sequence for simulation."
 
-    model, vocab = load_model(model_path, use_cached_model=True, device=device)
+    # Size the model's positional caches to the longest generation we'll do. The decoder
+    # generates up to max_decode_steps = 2*root, so a family with a long root overruns the
+    # default 1024-wide KV/RoPE cache and crashes. In progressive decoding the encoder's source
+    # is a previously-decoded node, which also grows up to 2*root, so the cross-attention cache
+    # (max_encoder_seq_len) needs the SAME 2*max_root bound as the decoder self-attention cache
+    # -- sizing the encoder cache to root+2 is too small and crashes in cross_attn. Cache-size
+    # only -- it does not change generated sequences. (Root-length sizing needs
+    # root_sequences_dir; the MSA-median mode keeps the model defaults.)
+    max_enc = max_dec = None
+    if root_sequences_dir:
+        max_root = max(_family_root_length(f, root_sequences_dir) for f in families)
+        max_enc = max_dec = max(1024, 2 * max_root + 2)
+    model, vocab = load_model(model_path, use_cached_model=True, device=device,
+                              max_encoder_seq_len=max_enc, max_decoder_seq_len=max_dec)
     map_args = [
         [
             msa_dir,
@@ -577,6 +606,7 @@ def simulate_peint_evolution_down_tree(
             ratio_rejection_sampling,
             use_likelihood_filtering,
             random_seed,
+            family_bucket_size,
             output_sequences_dir
         ]
         for process_rank in range(num_processes)

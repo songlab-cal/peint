@@ -274,18 +274,29 @@ class _PeintTransformerBase(nn.Module, ABC):
             device: Target device
 
         Returns:
-            Tuple of (batch_size, x_attn_mask, y_decoded, eos_reached, zero_idx)
+            Tuple of (batch_size, x_attn_mask, y_decoded, eos_reached)
         """
         batch_size = x.size(0)
         x_attn_mask = x.eq(self.vocab.padding_idx)
         y_decoded = torch.tensor([self.vocab.cls_idx]).unsqueeze(0).repeat(batch_size, 1).to(device)
         eos_reached = torch.zeros(batch_size, dtype=torch.bool).to(device)
-        zero_idx = torch.tensor([
-            self.vocab.get_idx(tok)
-            for tok in self.vocab.all_toks
-            if tok not in STANDARD_STATES
-        ])
-        return batch_size, x_attn_mask, y_decoded, eos_reached, zero_idx
+        return batch_size, x_attn_mask, y_decoded, eos_reached
+
+    def _mask_nonstandard_states(self, logits: torch.Tensor) -> torch.Tensor:
+        """Set every logit position that is not a standard generation state to -inf.
+
+        The only emittable tokens are ``STANDARD_STATES`` (the 20 amino acids + ``<eos>``),
+        whose ids come from ``self.vocab``. The head width is read from ``logits`` at
+        runtime, so this is backbone/vocab-agnostic: head slots that map to no emittable
+        token (e.g. ESM-C's 64-wide head over a 33-token vocab) are masked without any
+        model-specific special-casing.
+        """
+        allowed = torch.tensor(
+            [self.vocab.get_idx(s) for s in STANDARD_STATES], device=logits.device
+        )
+        forbid = torch.ones(logits.size(-1), dtype=torch.bool, device=logits.device)
+        forbid[allowed] = False
+        return logits.masked_fill(forbid, float("-inf"))
 
     def evaluate_transition_logits(
         self,
@@ -544,14 +555,14 @@ class PeintTransformer(_PeintTransformerBase):
         Returns:
             List of generated amino acid sequences
         """
-        _, x_attn_mask, y_decoded, eos_reached, zero_idx = self._prepare_generation(x, device)
+        _, x_attn_mask, y_decoded, eos_reached = self._prepare_generation(x, device)
 
         for _ in range(max_decode_steps):
             y_attn_mask = y_decoded.eq(self.vocab.padding_idx)
             _, logits = self(x, y_decoded, t, x_attn_mask, y_attn_mask)
 
             logits = logits[:, -1, :] / temperature
-            logits[..., zero_idx] = -np.inf
+            logits = self._mask_nonstandard_states(logits)
 
             next_tok = sampling_function(logits, p=p)
             y_decoded = torch.cat([y_decoded, next_tok], dim=1)
@@ -656,7 +667,7 @@ class PeintGenerator(PeintTransformer):
         Returns:
             List of generated amino acid sequences
         """
-        batch_size, x_attn_mask, y_decoded, eos_reached, zero_idx = self._prepare_generation(x, device)
+        batch_size, x_attn_mask, y_decoded, eos_reached = self._prepare_generation(x, device)
 
         # Initialize KV caches
         for dec_layer in self.dec_layers:
@@ -668,7 +679,7 @@ class PeintGenerator(PeintTransformer):
 
         for _ in range(max_decode_steps - 1):
             logits = logits[:, -1, :] / temperature
-            logits[..., zero_idx] = -np.inf
+            logits = self._mask_nonstandard_states(logits)
 
             next_token = sampling_function(logits, p=p)
 
@@ -908,14 +919,14 @@ class PeintTransformerVanilla(_PeintTransformerBase):
         p: float = 1.0
     ) -> List[str]:
         """Generate sequences using nucleus sampling."""
-        _, x_attn_mask, y_decoded, eos_reached, zero_idx = self._prepare_generation(x, device)
+        _, x_attn_mask, y_decoded, eos_reached = self._prepare_generation(x, device)
 
         for _ in range(max_decode_steps):
             y_attn_mask = y_decoded.eq(self.vocab.padding_idx)
             _, y_logits, _, _, _ = self(x, y_decoded, t, x_attn_mask, y_attn_mask)
 
             logits = y_logits[:, -1, :] / temperature
-            logits[..., zero_idx] = -np.inf
+            logits = self._mask_nonstandard_states(logits)
 
             next_tok = sampling_function(logits, p=p)
             y_decoded = torch.cat([y_decoded, next_tok], dim=1)
