@@ -48,6 +48,24 @@ UNALIGNED_TEST_TRANSITIONS_DIR = (
 UNALIGNED_TEST_ALIGNMENT_MASK_DIR = "local_data/unaligned/test_alignment_mask_dir"
 
 PEINT_CHECKPOINT_FILE = "model_checkpoints/peint.ckpt"
+# ESM-C PEINT (A3, 60k; frozen esmc_300m + trained PEINT). Self-describing checkpoint
+# (encoder_backbone="esmc-biohub"), auto-loaded onto the Biohub ESM-C backbone by
+# protevo.models.load_peint_model. Requires the `peint-esmc` env (+ HF_HOME set).
+ESMC_CHECKPOINT_FILE = (
+    "/scratch/users/yufan.cao/protevo_ablations/esmc/"
+    "20260729-5e5d20h960d-esmc-14498fams-esmc/epoch=4-step=60000.ckpt"
+)
+
+# Canonical model->color scheme, matched to the paper's ESM-C figures (seaborn "deep"
+# palette indices: WAG=0, LG4X=3, PEINT (ESM2)=2 green, PEINT (ESM-C)=9 cyan).
+_DEEP = sns.color_palette("deep")
+MODEL_COLORS = {
+    "Random guess": "gray",
+    "WAG": _DEEP[0],
+    "LG (4 rate categories)": _DEEP[3],
+    "PEINT (ESM2)": _DEEP[2],
+    "PEINT (ESM-C)": _DEEP[9],
+}
 
 # Families held out of training regardless of where the shuffle put them.
 HELD_OUT_CAS = ["5e2r_1_A", "1ekj_1_C"]
@@ -159,7 +177,9 @@ def plot_mean_likelihood(totals, counts, quantization_points, output_path):
     plt.rcParams["ytick.minor.left"] = True
     plt.rcParams["grid.linewidth"] = 0.5
     plt.rcParams.update(
-        {"font.size": 8, "axes.labelsize": 8, "xtick.labelsize": 7, "ytick.labelsize": 7}
+        {"font.size": 8, "axes.labelsize": 8, "xtick.labelsize": 7, "ytick.labelsize": 7,
+         # Editable TrueType text in the PDF for Illustrator (not outlined Type3).
+         "pdf.fonttype": 42, "ps.fonttype": 42}
     )
 
     fig, ax = plt.subplots(figsize=(3, 2))
@@ -171,9 +191,9 @@ def plot_mean_likelihood(totals, counts, quantization_points, output_path):
         if len(xs) > 0:
             max_x = max(max_x, xs.max())
 
-        style = {"linewidth": 0.75, "legend": False}
+        style = {"linewidth": 0.75, "legend": False, "color": MODEL_COLORS.get(name)}
         if name == "Random guess":
-            style.update({"linestyle": "--", "color": "gray"})
+            style["linestyle"] = "--"
         sns.lineplot(x=xs, y=ys, label=name, ax=ax, **style)
 
     ticks_base = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
@@ -196,13 +216,19 @@ def plot_mean_likelihood(totals, counts, quantization_points, output_path):
     sns.despine(ax=ax, top=True, right=True)
     fig.tight_layout()
     fig.savefig(output_path, bbox_inches="tight")
+    fig.savefig(output_path.replace(".pdf", ".png"), dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"Wrote {output_path}")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--checkpoint", default=PEINT_CHECKPOINT_FILE)
+    parser.add_argument("--checkpoint", default=PEINT_CHECKPOINT_FILE,
+                        help="ESM2 PEINT checkpoint (the 'PEINT (ESM2)' line).")
+    parser.add_argument("--esmc-checkpoint", default=ESMC_CHECKPOINT_FILE,
+                        help="ESM-C PEINT checkpoint (adds the 'PEINT (ESM-C)' line).")
+    parser.add_argument("--no-esmc", action="store_true",
+                        help="Skip the ESM-C PEINT arm (ESM2-only, as originally).")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument(
@@ -294,23 +320,31 @@ def main():
             num_processes=args.num_processes,
             condition_on_non_gap=True,
         )
-        peint = evaluate_peint_model_transitions_log_likelihood__cached(
-            transitions_dir=UNALIGNED_TEST_TRANSITIONS_DIR,
-            aligned_transitions_dir=ALIGNED_TEST_TRANSITIONS_DIR,
-            alignment_mask_dir=UNALIGNED_TEST_ALIGNMENT_MASK_DIR,
-            model_checkpoint_path=args.checkpoint,
-            families=families,
-            device=args.device,
-            batch_size=args.batch_size,
-        )
+        def peint_eval(checkpoint):
+            return evaluate_peint_model_transitions_log_likelihood__cached(
+                transitions_dir=UNALIGNED_TEST_TRANSITIONS_DIR,
+                aligned_transitions_dir=ALIGNED_TEST_TRANSITIONS_DIR,
+                alignment_mask_dir=UNALIGNED_TEST_ALIGNMENT_MASK_DIR,
+                model_checkpoint_path=checkpoint,
+                families=families,
+                device=args.device,
+                batch_size=args.batch_size,
+            )
+
+        results = [
+            ("Random guess", random_guess),
+            ("WAG", wag),
+            ("LG (4 rate categories)", lg_4rc),
+            ("PEINT (ESM2)", peint_eval(args.checkpoint)),
+        ]
+        # ESM-C PEINT on the SAME transitions/projection, scored with the Biohub ESM-C
+        # checkpoint. restrict_to_amino_acids (default) renormalizes both PEINTs over the
+        # 20 amino acids, so ESM2 and ESM-C are directly comparable column by column.
+        if not args.no_esmc:
+            results.append(("PEINT (ESM-C)", peint_eval(args.esmc_checkpoint)))
         return {
             name: result["output_transitions_log_likelihood_per_site_dir"]
-            for name, result in [
-                ("Random guess", random_guess),
-                ("WAG", wag),
-                ("LG (4 rate categories)", lg_4rc),
-                ("PEINT", peint),
-            ]
+            for name, result in results
         }
 
     print("Getting test predictions ...")
