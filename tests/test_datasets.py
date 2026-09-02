@@ -217,7 +217,7 @@ class TestPeintDataset:
 
         assert isinstance(x, torch.Tensor), "x should be tensor"
         assert isinstance(y, torch.Tensor), "y should be tensor"
-        assert isinstance(t, torch.Tensor), "t should be tensor"
+        assert isinstance(t, float), "t should be a scalar float (memory-efficient store)"
         assert isinstance(length, int), "length should be int"
 
     def test_dataset_time_minimum(self, sample_data_dir, mock_vocab):
@@ -231,8 +231,8 @@ class TestPeintDataset:
         # Second sequence has t=0.05, first has t=0.1
         _, _, t, _ = dataset[1]
 
-        # All time values should be >= 5e-3
-        assert (t >= 5e-3).all(), "Time values should be >= 5e-3"
+        # Time (a scalar now) should be clamped to >= 5e-3
+        assert t >= 5e-3, "Time value should be >= 5e-3"
 
 
 class TestPeintCollator:
@@ -259,8 +259,8 @@ class TestPeintCollator:
 
         # Create batch with different lengths
         batch = [
-            (torch.tensor([4, 5, 6]), torch.tensor([4, 5, 6]), torch.tensor([0.1, 0.1, 0.1]), 3),
-            (torch.tensor([7, 8]), torch.tensor([7, 8]), torch.tensor([0.2, 0.2]), 2),
+            (torch.tensor([4, 5, 6]), torch.tensor([4, 5, 6]), 0.1, 3),
+            (torch.tensor([7, 8]), torch.tensor([7, 8]), 0.2, 2),
         ]
 
         x_inputs, x_targets, y_inputs, y_targets, ts, x_pad_mask, y_pad_mask = collator(batch)
@@ -277,7 +277,7 @@ class TestPeintCollator:
         collator = PeintCollator(vocab=mock_vocab, mask_prob=0.0)
 
         batch = [
-            (torch.tensor([4, 5]), torch.tensor([4, 5]), torch.tensor([0.1, 0.1]), 2),
+            (torch.tensor([4, 5]), torch.tensor([4, 5]), 0.1, 2),
         ]
 
         x_inputs, x_targets, y_inputs, y_targets, ts, _, _ = collator(batch)
@@ -294,7 +294,7 @@ class TestPeintCollator:
         collator = PeintCollator(vocab=mock_vocab, mask_prob=1.0)  # 100% masking
 
         batch = [
-            (torch.tensor([4, 5, 6, 7, 8]), torch.tensor([4, 5, 6, 7, 8]), torch.tensor([0.1] * 5), 5),
+            (torch.tensor([4, 5, 6, 7, 8]), torch.tensor([4, 5, 6, 7, 8]), 0.1, 5),
         ]
 
         x_inputs, x_targets, _, _, _, _, _ = collator(batch)
