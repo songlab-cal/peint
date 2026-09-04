@@ -27,11 +27,11 @@ import seaborn as sns
 from cherryml import caching as cherryml_caching
 from tqdm import tqdm
 
-from protevo import caching as protevo_caching
-from protevo import models
-from protevo.evaluation import evaluate_peint_model_transitions_log_likelihood__cached
-from protevo.io import read_transitions, read_transitions_log_likelihood_per_site
-from protevo.utils import (
+from peint import caching as peint_caching
+from peint import models
+from peint.evaluation import evaluate_peint_model_transitions_log_likelihood__cached
+from peint.io import read_transitions, read_transitions_log_likelihood_per_site
+from peint.utils import (
     get_quantile_idx,
     get_quantization_points_from_geometric_grid,
 )
@@ -50,7 +50,7 @@ UNALIGNED_TEST_ALIGNMENT_MASK_DIR = "local_data/unaligned/test_alignment_mask_di
 PEINT_CHECKPOINT_FILE = "model_checkpoints/peint.ckpt"
 # ESM-C PEINT (A3, 60k; frozen esmc_300m + trained PEINT). Self-describing checkpoint
 # (encoder_backbone="esmc-biohub"), auto-loaded onto the Biohub ESM-C backbone by
-# protevo.models.load_peint_model. Requires the `peint-esmc` env (+ HF_HOME set).
+# peint.models.load_peint_model. Requires the `peint-esmc` env (+ HF_HOME set).
 ESMC_CHECKPOINT_FILE = (
     "/scratch/users/yufan.cao/protevo_ablations/esmc/"
     "20260729-5e5d20h960d-esmc-14498fams-esmc/epoch=4-step=60000.ckpt"
@@ -254,9 +254,9 @@ def main():
     )
     args = parser.parse_args()
 
-    protevo_caching.set_cache_dir("_cache_peint")
-    protevo_caching.set_read_only(False)
-    protevo_caching.set_log_level(9)
+    peint_caching.set_cache_dir("_cache_peint")
+    peint_caching.set_read_only(False)
+    peint_caching.set_log_level(9)
 
     # CherryML keeps its own cache, and it is a separate caching system: giving
     # it its own directory keeps the two from writing over each other.

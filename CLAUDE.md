@@ -8,8 +8,8 @@ ESM2 is used as a pretrained model to provide general pretrained features for th
 
 ## Repository Structure
 
-- `protevo/`: Main PEINT model code, including the encoder-decoder architecture, datasets and utils.
-  - `protevo/models/`: Model architecture code (no pytorch-lightning or wandb dependency).
+- `peint/`: Main PEINT model code, including the encoder-decoder architecture, datasets and utils.
+  - `peint/models/`: Model architecture code (no pytorch-lightning or wandb dependency).
     - `_transformer.py`: Core transformer classes: `PeintTransformer` (Flash Attention), `PeintTransformerVanilla` (standard attention), `PeintGenerator` (KV caching for generation), `PeintEvaluator` (encoder caching for likelihood evaluation).
     - `_transformer_modules.py`: Transformer modules. Some use FLASH attention, some don't. Some have KV caching, some don't.
     - `_flash_esm.py`: Rewrites the base ESM2 modules using FLASH attention for faster training.
@@ -19,20 +19,20 @@ ESM2 is used as a pretrained model to provide general pretrained features for th
     - `_equ.py`: EQU model (equal exchangeabilities; not trained).
     - `_uniform_random_guess.py`: Uniform random guess baseline (no parameters).
     - `_optimization.py`: LR scheduler.
-  - `protevo/models/training.py`: Training components (requires pytorch-lightning and wandb).
+  - `peint/models/training.py`: Training components (requires pytorch-lightning and wandb).
     - `PeintLightningModule`: PyTorch Lightning wrapper for training.
     - `ValidationLikelihoodCallback`, `GradNormCallback`: Training callbacks.
-  - `protevo/datasets/`: Dataset loading and processing code.
+  - `peint/datasets/`: Dataset loading and processing code.
     - `_torch_datasets.py`: `PeintDataset` and `PeintCollator` (no lightning dependency).
     - `training.py`: `PeintDataModule` (requires pytorch-lightning).
-  - `protevo/evaluation/`: Per-site likelihood evaluation against the classical models.
+  - `peint/evaluation/`: Per-site likelihood evaluation against the classical models.
     - `_aligned_transitions.py`: `AlignedTransitionsDataset`, which maps PEINT's unaligned residues back onto alignment columns using the a3m alignment mask.
     - `_likelihood.py`: Per-site log-likelihoods, cached per family, written in the same format as the LG/WAG evaluators.
-  - `protevo/homology.py`: Homology search code.
-  - `protevo/simulation/`: Code for simulating protein sequences along phylogenetic trees.
-  - `protevo/time_mle/`: Maximum likelihood estimation of evolutionary time.
-  - `protevo/caching/`: Caching utilities for expensive computations.
-  - `protevo/utils.py`: Utility functions.
+  - `peint/homology.py`: Homology search code.
+  - `peint/simulation/`: Code for simulating protein sequences along phylogenetic trees.
+  - `peint/time_mle/`: Maximum likelihood estimation of evolutionary time.
+  - `peint/caching/`: Caching utilities for expensive computations.
+  - `peint/utils.py`: Utility functions.
 - `tests/`: Pytest test suite (integration tests require model checkpoint).
 
 ## Dependency Architecture
@@ -41,12 +41,12 @@ Training dependencies (pytorch-lightning, wandb) are isolated in dedicated modul
 
 ```python
 # Core imports - no lightning/wandb required
-from protevo.models import PeintTransformer, PeintGenerator, PeintEvaluator, load_model
-from protevo.datasets import PeintDataset, PeintCollator
+from peint.models import PeintTransformer, PeintGenerator, PeintEvaluator, load_model
+from peint.datasets import PeintDataset, PeintCollator
 
 # Training imports - requires lightning/wandb
-from protevo.models.training import PeintLightningModule, ValidationLikelihoodCallback
-from protevo.datasets.training import PeintDataModule
+from peint.models.training import PeintLightningModule, ValidationLikelihoodCallback
+from peint.datasets.training import PeintDataModule
 ```
 
 Can you help me to make this ready to share. There are some hard-coded links, and I have changed the name of the checkpoint from `epoch=2-step=40000.ckpt` to `peint.ckpt`. This needs to be updated in the tests.

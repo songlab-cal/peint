@@ -1,9 +1,9 @@
 # VEP module migration plan
 
 Migrate the Variant Effect Prediction (VEP) pipeline (junhaobearxiong) from
-`songlab-cal/protein-evolution@bear_analysis:protevo/vep` into the split repos:
+`songlab-cal/protein-evolution@bear_analysis:peint/vep` into the split repos:
 
-- **peint (this repo)** — the **train / score / eval** suite, as a new `protevo/vep/` package.
+- **peint (this repo)** — the **train / score / eval** suite, as a new `peint/vep/` package.
   Rationale: the encoder is easy to swap, so training a PEINT model on VEP data and scoring it
   is a core library capability.
 - **peint-paper** — the **plotting** code (paper + supplementary figures), in a later phase.
@@ -34,7 +34,7 @@ Verified against peint's current code.
 | `ValidationLikelihoodCallback`, `GradNormCallback` (imported from `models._model_utils`) | same names, **moved** to `models._training_callbacks` (public `models.training`) | fix import path |
 | `ProtevoESMEncoderDecoderDataModule` (`datasets._torch_datasets`) | `PeintDataModule` (`datasets._training`) | renamed; near-identical **minus `quantize_time`** |
 | `ProtEvoDataset` / `ESMEncoderDecoderTransformerCollator` | `PeintDataset` / `PeintCollator` (`datasets._torch_datasets`) | renamed (used internally by the DataModule) |
-| `get_quantile_idx`, `get_quantization_points_from_geometric_grid` (`protevo.utils`) | same | unchanged |
+| `get_quantile_idx`, `get_quantization_points_from_geometric_grid` (`peint.utils`) | same | unchanged |
 | `evaluate_wag_model_transitions_log_likelihood_per_site` (`models._wag`) | same | unchanged |
 | `construct_dataset_on_msas` (`datasets._msa_datasets`) | **absent** — port it | see Phase 1 |
 
@@ -57,27 +57,27 @@ Verified against peint's current code.
 
 Everything `datasets/_msa_datasets.py` needs already exists in peint:
 
-- `protevo.io`: `Tree, get_msa_num_residues/sequences/sites, read_msa, read_pickle, read_tree,
+- `peint.io`: `Tree, get_msa_num_residues/sequences/sites, read_msa, read_pickle, read_tree,
   write_msa, write_pickle, write_tree, write_transitions, read_secondary_structure` — all exported ✓
-- `protevo.datasets._datasets`: `extract_transitions` (L463), `alphabetize_msa` (L557) ✓
-- `protevo.utils`: `amino_acids`, `gap_character` ✓
-- `cherryml` (git dep) ✓, `data/rate_matrices/wag.txt` ✓, `protevo.caching` ✓
+- `peint.datasets._datasets`: `extract_transitions` (L463), `alphabetize_msa` (L557) ✓
+- `peint.utils`: `amino_acids`, `gap_character` ✓
+- `cherryml` (git dep) ✓, `data/rate_matrices/wag.txt` ✓, `peint.caching` ✓
 
-Edits on port: drop the unused `from protevo import caching as protevo_caching` import; repoint
-`from protevo.vep._vep_utils import MAIN_DIR` to `protevo.vep._config.MAIN_DIR`. Add `loguru` +
+Edits on port: drop the unused `from peint import caching as peint_caching` import; repoint
+`from peint.vep._vep_utils import MAIN_DIR` to `peint.vep._config.MAIN_DIR`. Add `loguru` +
 `joblib` to peint deps if not already present.
 
 ## Phase 0 — setup
 
-1. Vendor `ProteinGym3` as a git submodule under `protevo/vep/`, pinned at `8fd91a0`
+1. Vendor `ProteinGym3` as a git submodule under `peint/vep/`, pinned at `8fd91a0`
    (needed by `_dms_datasets.get_dms_substitutions_families` and the test-transition cache paths).
-2. Create `protevo/vep/__init__.py`.
+2. Create `peint/vep/__init__.py`.
 3. Gitignored data symlinks (document in README, per bear's setup):
    `data/local_data/peint_data -> /scratch/.../peint_paper`,
    `data/local_data/checkpoints -> /scratch/.../checkpoints/peint`.
 4. Add `loguru`, `joblib` to `pyproject.toml` if missing.
 
-## Phase 1 — train / score / eval  → `protevo/vep/`
+## Phase 1 — train / score / eval  → `peint/vep/`
 
 Copy-and-adapt, file by file. Only `_train_utils.py`, `_vep_utils.py`, `train_peint_vep.py`
 need edits beyond docstrings.
@@ -87,7 +87,7 @@ need edits beyond docstrings.
 | `_config.py` | Copy verbatim. Paths resolve off peint's `MAIN_DIR`. Optional: allow `DATA_ROOT` env override to match peint convention. |
 | `encoders.py` | Copy verbatim (self-contained; imports `ESM2Flash` from core). VEP keeps its own `ESM_REGISTRY`. |
 | `_scoring.py` | Copy; docstring rename `ESMPretrainedTransformer`→`PeintTransformer` (code is model-agnostic). |
-| `_vep_utils.py` | Rewrite `ProtEvoPretrainedTransformerModule`→`PeintLightningModule` (from `protevo.models.training`); `PeintGenerator` unchanged. Remove any `use_quantized_time` handling. |
+| `_vep_utils.py` | Rewrite `ProtEvoPretrainedTransformerModule`→`PeintLightningModule` (from `peint.models.training`); `PeintGenerator` unchanged. Remove any `use_quantized_time` handling. |
 | `_train_utils.py` | Rewrite 3 imports: callbacks `models._model_utils`→`models.training`; datamodule `ProtevoESMEncoderDecoderDataModule`→`PeintDataModule` (`datasets._training`); model `ProtEvoPretrainedTransformerModule`→`PeintLightningModule`. Remove quantized-time plumbing (arg parser flag, `prepare_model_args`, `DMSEvaluationCallback` branch). `ProtevoMixedDataModule` / `DMSEvaluationCallback` / mixing samplers are otherwise unchanged. |
 | `train_peint_vep.py` | Import `PeintDataModule`; drop the `quantize_time=` kwarg on both DataModule constructions. |
 | `compute_fitness.py` | Copy verbatim (imports resolve after core). Drop the `"quantized" in ckpt_name` branch. |
@@ -98,30 +98,30 @@ need edits beyond docstrings.
 ### Tests (real, no mocks — per CLAUDE.md)
 - Pure key-mapping test for `encoders.convert_hf_esm_state_dict_to_fair_esm` on a small
   synthetic state dict (no downloads).
-- Import smoke test for the `protevo.vep` package.
+- Import smoke test for the `peint.vep` package.
 
 ## Phase 2 — plotting → peint-paper  (after Phase 1 lands)
 
 Move `plotting/{main_figures,analysis_figures,_style,spearman_from_csv}.py` into peint-paper.
 Two small deps travel with them and need a home (decide at Phase 2):
 
-- `protevo.io._files` (746 B; imported as `from protevo.io._files import *`)
-- `protevo.eda._time_distribution.get_time_distribution`
+- `peint.io._files` (746 B; imported as `from peint.io._files import *`)
+- `peint.eda._time_distribution.get_time_distribution`
 
 Options: vendor both into peint-paper, or add thin `io/eda` shims to peint core. Also repoint the
 hardcoded figure run-targets to `paper_config`.
 
 ## Verification
 
-- `python -c "import protevo.vep"` smoke import.
+- `python -c "import peint.vep"` smoke import.
 - Run the encoders converter unit test.
 - If a small cached test-transitions dir is reachable, a 1-family dry run of
-  `python -m protevo.vep.compute_fitness ... --family_subset <one>` end-to-end.
+  `python -m peint.vep.compute_fitness ... --family_subset <one>` end-to-end.
 
 ## Status (updated 2026-08-01)
 
 **Phases 0 + 1 complete, committed** (peint `vep-migration`): all VEP files ported to
-`protevo/vep/`, builder `_msa_datasets.py` in place, bear→peint renames applied, quantized-time
+`peint/vep/`, builder `_msa_datasets.py` in place, bear→peint renames applied, quantized-time
 removed, ProteinGym3 submodule vendored, tests + README written. Scoring is Lightning/wandb-free
 and CPU-capable; `load_model` auto-handles both stripped (distributed `vep.ckpt`) and full checkpoints.
 

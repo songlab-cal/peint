@@ -59,7 +59,7 @@ These are lightweight **PEINT-only** checkpoints: they contain just the trained 
 ### Loading a Pretrained Model
 
 ```python
-from protevo.models import load_model
+from peint.models import load_model
 import torch
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -85,7 +85,7 @@ print(generated[0])
 ### Evaluating Likelihood
 
 ```python
-from protevo.models import load_model
+from peint.models import load_model
 import torch
 
 model, vocab = load_model('model_checkpoints/peint.ckpt', use_cached_model=False, device='cuda', use_flash=False)
@@ -120,7 +120,7 @@ print(f"NLL: {nll.item():.4f}")
 Load `vep.ckpt` as an `evaluator` and score many variants against a wild-type sequence with `evaluate_likelihood`. This works with or without Flash Attention (it falls back to the standard-attention model automatically).
 
 ```python
-from protevo.models import load_peint_model
+from peint.models import load_peint_model
 import torch
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -140,18 +140,18 @@ See `vep.ipynb` for an end-to-end example on deep mutational scanning data.
 ### Per-Site Likelihood vs. Classical Models
 
 PEINT reads unaligned sequences, so its per-residue log-likelihoods are indexed by
-residue, while LG and WAG score alignment columns. `protevo.evaluation` bridges the
+residue, while LG and WAG score alignment columns. `peint.evaluation` bridges the
 two: it runs PEINT on the unaligned transitions, drops the residues that are
 insertions relative to the query (using the a3m alignment mask), and places what
 remains in its alignment column. Gap columns are scored 0, so summing over sites
 ignores them; use `dataset.scored_columns_mask()` to average over the rest.
 
 ```python
-from protevo.evaluation import (
+from peint.evaluation import (
     AlignedTransitionsDataset,
     evaluate_transitions_log_likelihood_per_site,
 )
-from protevo.models import load_peint_model
+from peint.models import load_peint_model
 import torch
 
 device = torch.device('cuda')
@@ -173,7 +173,7 @@ The same computation over many families, cached and written in the same layout a
 the LG/WAG evaluators:
 
 ```bash
-python -m protevo.evaluation \
+python -m peint.evaluation \
     --transitions-dir   local_data/unaligned/test_transitions_dir/output_transitions_dir \
     --aligned-transitions-dir local_data/aligned/test_transitions_dir \
     --alignment-mask-dir local_data/unaligned/test_alignment_mask_dir \
@@ -194,11 +194,11 @@ The most basic is an all-vs-all setup, in which you provide a directory of named
 You can either use peint, or DIAMOND (Blastp) for comparison.
 
 ```bash
-python -m protevo.homology_detection all-vs-all \
+python -m peint.homology_detection all-vs-all \
  --method peint \
  --checkpoint model_checkpoints/<model_ckpt>.pt \
- --proteome-dir protevo/tests/homology_test_dir \
- --distance-matrix protevo/tests/times.csv \
+ --proteome-dir peint/tests/homology_test_dir \
+ --distance-matrix peint/tests/times.csv \
  --output results.csv
 ```
 
@@ -228,7 +228,7 @@ You really want to cache these functions.
 This decorator wraps a function and caches its results to disk.
 
 ```python
-from protevo.datasets import get_a3m_families, a3m_dataset__cached
+from peint.datasets import get_a3m_families, a3m_dataset__cached
 
 # List available families
 families = get_a3m_families("/path/to/a3m_files", num_families=100)
@@ -290,7 +290,7 @@ pytest -m "not slow"
 ## Project Structure
 
 ```
-protevo/
+peint/
 ├── models/           # Model architectures
 │   ├── _transformer.py          # Main PEINT models
 │   ├── _transformer_modules.py  # Attention and layer modules

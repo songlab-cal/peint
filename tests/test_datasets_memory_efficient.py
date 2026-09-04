@@ -14,7 +14,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from esm.data import Alphabet
 
-from protevo.datasets._torch_datasets import PeintCollator, PeintDataset
+from peint.datasets._torch_datasets import PeintCollator, PeintDataset
 
 VOCAB = Alphabet.from_architecture("ESM-1b")  # no download
 

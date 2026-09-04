@@ -156,7 +156,7 @@ torch 2.5.0 / flash-attn 2.7.0.post2 stack above.
 
 The Biohub fork sidesteps this entirely: its ESM-C implementation lives under the `transformers`
 namespace (`transformers/models/esmc/`) and imports `esm` nowhere, so it coexists with `fair-esm`
-and no PEINT code has to change. `protevo/models/_esmc_biohub.py` is the only module that touches
+and no PEINT code has to change. `peint/models/_esmc_biohub.py` is the only module that touches
 it, and its `transformers` imports are lazy — ESM2-only users never load it.
 
 The two builds have been verified equivalent (same tokenizer, bitwise-identical bf16 weights,
@@ -185,7 +185,7 @@ import torch, transformers, esm                      # fork + fair-esm coexist
 print("transformers:", transformers.__version__)     # 4.57.6 (fork)
 from transformers import EsmForMaskedLM              # ESM2/vESM path still works on the fork
 
-from protevo.models._esmc_biohub import build_esmc_biohub_backbone
+from peint.models._esmc_biohub import build_esmc_biohub_backbone
 model, vocab, dim = build_esmc_biohub_backbone("esmc-biohub", use_flash=False)  # CPU-capable
 print("embed_dim:", dim, "| vocab:", len(vocab))     # 960 | 33
 ids = torch.tensor([[vocab.cls_idx] + vocab.encode("ACDEFGHIK") + [vocab.eos_idx]])
@@ -199,7 +199,7 @@ Then load an actual ESM-C checkpoint — `load_peint_model` detects the backbone
 checkpoint's hyperparameters and builds the ESM-C encoder automatically (no flag needed):
 
 ```python
-from protevo.models import load_peint_model
+from peint.models import load_peint_model
 model, vocab = load_peint_model("model_checkpoints/peint_esmc.ckpt", device="cuda")
 ```
 
@@ -222,7 +222,7 @@ command):
 
 ```bash
 import flash_attn
-ImportError: /envs/protevo/bin/torch/lib/python3.10/site-packages/torch/lib/../../../../libstdc++.so.6: version `GLIBCXX_3.4.32' not found (required by /envs/protevo/lib/python3.10/site-packages/flash_attn_2_cuda.cpython-310-x86_64-linux-gnu.so)
+ImportError: /envs/peint/bin/torch/lib/python3.10/site-packages/torch/lib/../../../../libstdc++.so.6: version `GLIBCXX_3.4.32' not found (required by /envs/peint/lib/python3.10/site-packages/flash_attn_2_cuda.cpython-310-x86_64-linux-gnu.so)
 ```
 
 To the best of my knowledge, this comes from different versions of torch being compiled with

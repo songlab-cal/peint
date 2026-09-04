@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "protevo"
+name = "peint"
 version = "0.1.0"
 description = "PEINT: Protein Evolution IN Time - A transformer model for protein evolutionary modeling"
 readme = "README.md"
@@ -56,10 +56,10 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["protevo*"]
+include = ["peint*"]
 
 [tool.setuptools.package-data]
-"protevo.simulation" = ["assets/*.nex"]
+"peint.simulation" = ["assets/*.nex"]
 
 [tool.black]
 line-length = 100

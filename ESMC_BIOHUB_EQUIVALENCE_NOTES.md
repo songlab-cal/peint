@@ -73,7 +73,7 @@ head slots and the 20 AA slots.
 
 ## 4. Loader fix (applied) — `encoder_backbone` naming gap
 
-`protevo/vep/_vep_utils.py::load_model` routed to the biohub backbone **only** when
+`peint/vep/_vep_utils.py::load_model` routed to the biohub backbone **only** when
 `hparams["encoder_backbone"] == "esmc-biohub"`. Yufan's checkpoints (trained on
 `foundation`/`ablation-a3-esmc`) record **`encoder_backbone="esmc"`** (esm3‑package name), so
 `load_model` fell through to the ESM2 arch‑inference path and **raised** on ESM‑C checkpoints.

@@ -5,7 +5,7 @@ import pytest
 import torch
 import tempfile
 
-from protevo.datasets import (
+from peint.datasets import (
     PeintDataset,
     PeintCollator,
     get_a3m_families,
@@ -14,7 +14,7 @@ from protevo.datasets import (
 
 
 # Path to test a3m directory with 2 files: O13297.a3m and Q9T0N8.a3m
-A3M_TEST_DIR = os.path.join(os.path.dirname(__file__), "..", "protevo", "tests", "a3m_test_dir")
+A3M_TEST_DIR = os.path.join(os.path.dirname(__file__), "..", "peint", "tests", "a3m_test_dir")
 # Path to rate matrices
 RATE_MATRIX_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "rate_matrices", "wag.txt")
 
@@ -77,12 +77,12 @@ class TestA3mDataset:
 
     @pytest.fixture
     def cache_dir(self):
-        """Set up temporary cache directory for cherryml and protevo."""
+        """Set up temporary cache directory for cherryml and peint."""
         from cherryml import caching as cherryml_caching
-        from protevo import caching as protevo_caching
+        from peint import caching as peint_caching
         with tempfile.TemporaryDirectory() as tmpdir:
             cherryml_caching.set_cache_dir(tmpdir)
-            protevo_caching.set_cache_dir(tmpdir)
+            peint_caching.set_cache_dir(tmpdir)
             yield tmpdir
 
     @pytest.mark.slow
