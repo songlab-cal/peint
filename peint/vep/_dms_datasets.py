@@ -61,7 +61,7 @@ def main():
     # cache-managed function: with caching on, the wrapper fills in its
     # alignment-mask / transition-name output dirs (which this builder doesn't
     # pass) and skips already-completed families on re-runs via `.success` tokens.
-    cache_dir = VEP_DATA_DIR / "_cache_protevo"
+    cache_dir = VEP_DATA_DIR / "_cache_peint"
     cache_dir.mkdir(parents=True, exist_ok=True)
     caching.set_cache_dir(str(cache_dir))
 
