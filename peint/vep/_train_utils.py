@@ -498,7 +498,9 @@ def setup_args():
         "--output_dir", type=str, help="Directory to save model checkpoints"
     )
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
-    parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
+    # The manuscript's Variant Effect Prediction methods specify AdamW at 2e-4 with weight
+    # decay 0.01, batch size 32 and gradient accumulation of 6. Match the reported values.
+    parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate")
     parser.add_argument(
         "--max_seq_len", type=int, default=1022, help="Maximum sequence length"
     )
@@ -538,7 +540,7 @@ def setup_args():
     parser.add_argument(
         "--accumulate_grad_batches",
         type=int,
-        default=1,
+        default=6,
         help="Number of batches to accumulate gradients over",
     )
     parser.add_argument(
