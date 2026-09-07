@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "PEINT: Protein Evolution IN Time - A transformer model for protein evolutionary modeling"
 readme = "README.md"
 requires-python = ">=3.9"
-license = {text = "CCBY-NC-4.0"}
+license = {text = "CC-BY-NC-4.0"}
 authors = [
     {name = "Antoine Koehl"}
 ]
