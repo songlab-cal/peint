@@ -188,7 +188,7 @@ def load_peint_model(
     state_dict = ckpt['state_dict']
 
     # Detect the frozen encoder backbone. Biohub ESM-C checkpoints record encoder_backbone
-    # in {"esmc", "esmc-biohub"} (the esm3-package / VEP names); everything else is ESM2.
+    # in {"esmc", "esmc-biohub"}; everything else is ESM2.
     # ESM-C is flash-native and brings its own backbone + 64-wide vocab, so it is built here
     # rather than via the ESM2 pretrained/scaffold paths. Its saved encoder/embedding/lm_head
     # weights load with strict=False below (they equal the biohub ESMC-300M weights in bf16),

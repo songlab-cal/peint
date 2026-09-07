@@ -82,8 +82,8 @@ def load_model(
     model_hparams = dict(sd["hyper_parameters"])
     model_hparams.update(kwargs)
 
-    # Biohub ESM-C selector. Accept both the VEP name ("esmc-biohub") and the
-    # foundation/ablation-a3-esmc name ("esmc", esm3-package): those checkpoints carry the
+    # Biohub ESM-C selector. Accept both the VEP name ("esmc-biohub") and the plain
+    # "esmc" used by EvolutionaryScale's package: those checkpoints carry the
     # same ESMC-300M weights (verified bit-identical in bf16), so both rebuild the biohub
     # transformers backbone. Its saved encoder weights load with strict=False below; the
     # ESM2 arch-inference path does not apply.
