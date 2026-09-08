@@ -15,7 +15,7 @@ srun python train_peint_model.py \
 --families_file /path/to/families.json \
 --output_dir checkpoints \
 --batch_size 32 \
---lr 4e-4 \
+--lr 3e-4 \
 --max_seq_len 1022 \
 --num_heads 20 \
 --num_encoder_layers 5 \

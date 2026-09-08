@@ -6,7 +6,7 @@ import torch
 import numpy as np
 
 # Test data directory
-TEST_DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'protevo', 'tests')
+TEST_DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'peint', 'tests')
 MODEL_CHECKPOINT_DIR = os.path.join(os.path.dirname(__file__), '..', 'model_checkpoints')
 
 
@@ -44,7 +44,7 @@ def checkpoint_path():
 @pytest.fixture(scope="session")
 def loaded_model(checkpoint_path, device):
     """Load model for testing (uses Vanilla/non-Flash for compatibility)."""
-    from protevo.models import load_model
+    from peint.models import load_model
     model, vocab = load_model(
         checkpoint_path,
         use_cached_model=False,

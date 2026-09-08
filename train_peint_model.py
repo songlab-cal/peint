@@ -8,14 +8,14 @@ import lightning as pl
 from lightning.pytorch.callbacks import LearningRateMonitor
 import esm
 
-from protevo.models._flash_esm import ESM2Flash
-from protevo.models import ESM2_REGISTRY, get_esm_model
-from protevo.models.training import (
+from peint.models._flash_esm import ESM2Flash
+from peint.models import ESM2_REGISTRY, get_esm_model
+from peint.models.training import (
     PeintLightningModule,
     ValidationLikelihoodCallback,
     GradNormCallback,
 )
-from protevo.datasets.training import PeintDataModule
+from peint.datasets.training import PeintDataModule
 
 
 def main(args):

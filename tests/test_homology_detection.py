@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from protevo.homology_detection import (
+from peint.homology_detection import (
     DiamondHomologySearcher,
     DiamondSearchConfig,
     HomologyHit,
@@ -23,7 +23,7 @@ from protevo.homology_detection import (
 
 # Test data directory
 HOMOLOGY_TEST_DIR = os.path.join(
-    os.path.dirname(__file__), "..", "protevo", "tests", "homology_test_dir"
+    os.path.dirname(__file__), "..", "peint", "tests", "homology_test_dir"
 )
 
 
@@ -145,7 +145,7 @@ class TestGetDistance:
 
 class TestWriteResults:
     def test_write_csv(self):
-        from protevo.homology_detection._base import HomologySearcher
+        from peint.homology_detection._base import HomologySearcher
 
         # Create a concrete implementation for testing
         class DummySearcher(HomologySearcher):
@@ -180,7 +180,7 @@ class TestWriteResults:
         assert "1.5" in content
 
     def test_write_json(self):
-        from protevo.homology_detection._base import HomologySearcher
+        from peint.homology_detection._base import HomologySearcher
 
         class DummySearcher(HomologySearcher):
             def search(self, database, queries, top_k=None):
@@ -343,8 +343,8 @@ class TestPeintHomologyIntegration:
     @pytest.fixture
     def peint_searcher(self, checkpoint_path, device):
         """Create PeintHomologySearcher for testing."""
-        from protevo.homology_detection import PeintHomologySearcher, PeintSearchConfig
-        from protevo.models._transformer_modules import FLASH_AVAILABLE
+        from peint.homology_detection import PeintHomologySearcher, PeintSearchConfig
+        from peint.models._transformer_modules import FLASH_AVAILABLE
 
         if not FLASH_AVAILABLE:
             pytest.skip("PEINT homology search requires Flash Attention (GPU compute >= 8.0)")

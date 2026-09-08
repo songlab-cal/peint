@@ -11,15 +11,15 @@ import esm
 import numpy as np
 import pytest
 
-from protevo.evaluation import (
+from peint.evaluation import (
     AlignedTransitionsDataset,
     evaluate_transitions_log_likelihood_per_site,
     list_families,
     sum_over_sites,
 )
-from protevo.io import read_transitions, read_transitions_log_likelihood_per_site
+from peint.io import read_transitions, read_transitions_log_likelihood_per_site
 
-EVAL_TEST_DIR = os.path.join(os.path.dirname(__file__), '..', 'protevo', 'tests', 'eval_test_dir')
+EVAL_TEST_DIR = os.path.join(os.path.dirname(__file__), '..', 'peint', 'tests', 'eval_test_dir')
 FAMILY = '4djg_1_B'
 
 
@@ -54,7 +54,7 @@ def reference_log_likelihood():
 @pytest.fixture(scope="module")
 def per_site_log_likelihood(dataset, checkpoint_path, device):
     """Score the fixture family in fp32, so the values are checkpoint-exact."""
-    from protevo.models import load_peint_model
+    from peint.models import load_peint_model
 
     model, model_vocab = load_peint_model(
         checkpoint_path, device=device, model_type='standard', use_flash=False
@@ -141,7 +141,7 @@ def test_sum_over_sites_ignores_unscored_columns():
 
 def test_uniform_random_guess_follows_the_same_gap_convention(eval_dirs):
     """The baseline has to score gaps the way PEINT does, or the two can't be compared."""
-    from protevo.models._uniform_random_guess import (
+    from peint.models._uniform_random_guess import (
         evaluate_uniform_random_guess_model_transitions_log_likelihood_per_site,
     )
 
@@ -183,7 +183,7 @@ def test_amino_acid_restriction_normalizes_over_twenty_states(
     dataset, checkpoint_path, device
 ):
     """Restricting to amino acids moves mass onto them, raising every score."""
-    from protevo.models import load_peint_model
+    from peint.models import load_peint_model
 
     model, model_vocab = load_peint_model(
         checkpoint_path, device=device, model_type='standard', use_flash=False
@@ -205,7 +205,7 @@ def test_amino_acid_restriction_normalizes_over_twenty_states(
 @pytest.mark.integration
 def test_batching_does_not_change_scores(dataset, checkpoint_path, device):
     """Padding a batch must not leak into the per-residue likelihoods."""
-    from protevo.models import load_peint_model
+    from peint.models import load_peint_model
 
     model, model_vocab = load_peint_model(
         checkpoint_path, device=device, model_type='standard', use_flash=False

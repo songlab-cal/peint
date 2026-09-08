@@ -11,10 +11,10 @@ import os
 
 import pytest
 
-from protevo.simulation._alisim import find_iqtree2_path
-from protevo.utils import read_msa
+from peint.simulation._alisim import find_iqtree2_path
+from peint.utils import read_msa
 
-SIM_DIR = os.path.join(os.path.dirname(__file__), "..", "protevo", "tests", "alisim_test_dir")
+SIM_DIR = os.path.join(os.path.dirname(__file__), "..", "peint", "tests", "alisim_test_dir")
 TREE_DIR = os.path.join(SIM_DIR, "tree_dir")
 MSA_DIR = os.path.join(SIM_DIR, "msa_dir")
 ROOT_DIR = os.path.join(SIM_DIR, "root_sequences_dir")
@@ -28,14 +28,14 @@ requires_iqtree = pytest.mark.skipif(
 
 @pytest.fixture
 def isolated_cache(tmp_path):
-    import protevo.caching as caching
+    import peint.caching as caching
 
     caching.set_cache_dir(str(tmp_path / "_cache"))
     yield
 
 
 def _run_alisim(model, mode, out_dir):
-    from protevo.simulation import simulate_alisim_evolution
+    from peint.simulation import simulate_alisim_evolution
 
     return simulate_alisim_evolution(
         tree_dir=TREE_DIR,
@@ -52,7 +52,7 @@ def _run_alisim(model, mode, out_dir):
 
 
 def test_classical_models_available():
-    from protevo.simulation import CLASSICAL_MODELS
+    from peint.simulation import CLASSICAL_MODELS
 
     assert CLASSICAL_MODELS == ["WAG", "LG", "LG4X", "LG+C60", "LG+S256"]
 
@@ -61,7 +61,7 @@ def test_evolve_classical_pure_python():
     """CTMC single-sequence evolution needs no external binary."""
     from cherryml.markov_chain import get_lg_path
 
-    from protevo.simulation.classical import evolve_classical
+    from peint.simulation.classical import evolve_classical
 
     x = "ACDEFGHIKLMNPQRSTVWY"
     y = evolve_classical(x=x, t=0.5, rate_matrix_path=get_lg_path(), random_seed=0)

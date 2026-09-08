@@ -1,4 +1,4 @@
-"""Tests for the VEP module (protevo.vep).
+"""Tests for the VEP module (peint.vep).
 
 Unit tests (no downloads, no checkpoint) cover the two pieces of load-time logic that
 are easy to get wrong: the HF->fair-esm vESM key converter and the ESM-architecture
@@ -12,8 +12,8 @@ import numpy as np
 import pytest
 import torch
 
-from protevo.vep.encoders import convert_hf_esm_state_dict_to_fair_esm
-from protevo.vep._vep_utils import _infer_esm_arch_from_state_dict, load_model
+from peint.vep.encoders import convert_hf_esm_state_dict_to_fair_esm
+from peint.vep._vep_utils import _infer_esm_arch_from_state_dict, load_model
 
 REPO_ROOT = os.path.join(os.path.dirname(__file__), "..")
 VEP_CKPT = os.path.join(REPO_ROOT, "model_checkpoints", "vep.ckpt")
@@ -94,8 +94,8 @@ class TestCPUScoring:
     def test_load_and_score_cpu(self, nram_pairs):
         if not os.path.exists(VEP_CKPT):
             pytest.skip("model_checkpoints/vep.ckpt not available")
-        from protevo.models._transformer import PeintTransformerVanilla
-        from protevo.vep._scoring import score_transition_pairs
+        from peint.models._transformer import PeintTransformerVanilla
+        from peint.vep._scoring import score_transition_pairs
 
         device = torch.device("cpu")
         model, vocab = load_model(VEP_CKPT, device, use_flash=False)
