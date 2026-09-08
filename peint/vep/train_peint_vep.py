@@ -46,9 +46,9 @@ def main():
     run_name = setup_run_name(args)
 
     # Set up logger
-    logger = pl.pytorch.loggers.wandb.WandbLogger(
-        name=run_name, project="protein-evolution", entity="antoinekoehl"
-    )
+    # Entity is deliberately unset: wandb falls back to the logged-in account, and
+    # WANDB_ENTITY overrides it for anyone logging to a team.
+    logger = pl.pytorch.loggers.wandb.WandbLogger(name=run_name, project="protein-evolution")
 
     # Load ESM model
     flash_esm_model, esm_vocab = load_esm_model(args.which_esm)

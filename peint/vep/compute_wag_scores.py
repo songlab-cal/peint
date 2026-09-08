@@ -6,6 +6,10 @@ from pathlib import Path
 
 from peint.models._wag import evaluate_wag_model_transitions_log_likelihood_per_site
 
+# The WAG rate matrix ships with this repository; resolve it relative to this file so the
+# default works from any working directory.
+DEFAULT_RATE_MATRIX = Path(__file__).resolve().parents[2] / "data" / "rate_matrices" / "wag.txt"
+
 
 def load_wag_rate_matrix(rate_matrix_path: str) -> pd.DataFrame:
     """Load WAG rate matrix from file."""
@@ -78,8 +82,8 @@ def main():
     parser.add_argument(
         "--rate_matrix_path",
         type=str,
-        default="/accounts/projects/yss/junhao_xiong/projects/protein-evolution/data/rate_matrices/wag.txt",
-        help="Path to WAG rate matrix",
+        default=str(DEFAULT_RATE_MATRIX),
+        help="Path to WAG rate matrix (defaults to the copy shipped in this repository)",
     )
     parser.add_argument(
         "--force_recompute",
