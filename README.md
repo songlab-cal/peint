@@ -2,6 +2,12 @@
 
 An encoder-decoder transformer for modeling protein sequence evolution. Given a source sequence and evolutionary time, PEINT autoregressively predicts the target sequence.
 
+The paper's figures, benchmarks and data live in the companion
+[`peint-paper`](https://github.com/songlab-cal/peint-paper) repository. The data itself is
+deposited on Zenodo as record `22151902` (DOI added on publication); because `zenodo.org` was
+unreachable on 9 September 2026, the 20 MB replot archive is temporarily mirrored on that
+repository's `zenodo-22151902` release. Model checkpoints are in the deposit, not here.
+
 ## Installation
 
 ### Requirements
