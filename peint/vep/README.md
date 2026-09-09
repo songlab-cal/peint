@@ -61,12 +61,22 @@ Plotting/figure code lives in the **peint-paper** repo, not here.
 
 ```
 ProteinGym MSAs → training transitions → TRAIN → SCORE
-   SiteRM/_datasets.py   _dms_datasets.py   train_peint_vep   compute_fitness
+  (upstream, external)   _dms_datasets.py   train_peint_vep   compute_fitness
 ```
 
-**1. Preprocess ProteinGym.** Run `ProteinGym3/proteingym/baselines/SiteRM/_datasets.py`; it
-builds the CherryML-cached "test" transitions that `_config.TEST_TRANSITIONS_DIR` points at.
-To only *evaluate* an existing checkpoint, stop here.
+**1. Upstream ProteinGym preprocessing — external to PEINT.** Two artifacts come from
+ProteinGym's own dataset script rather than from this package: the wild-type/mutant *test*
+transition pairs, which `_config.TEST_TRANSITIONS_DIR` points at, and the reformatted training
+MSAs, which `training_msa_dir()` points at. Both are CherryML-cached directories under whatever
+`PEINT_PROTEINGYM_DIR` names. PEINT reads them; it has no code that produces them.
+
+In a ProteinGym checkout, the script is `proteingym/baselines/SiteRM/_datasets.py`. It lives in
+that repository's SiteRM baseline directory for historical reasons only: **SiteRM is not a
+method, dependency, or installation requirement of PEINT**, and nothing in this package imports
+or runs it. The one helper PEINT once imported from that file,
+`get_dms_substitutions_families`, is now in `_dms_datasets.py`.
+
+To only *evaluate* an existing checkpoint against the shipped transitions, stop here.
 
 **2. Build training transitions.** `python -m peint.vep._dms_datasets` (no args; the
 production set is hardcoded to `hhfilter90`, dropping families with <10 sequences).
