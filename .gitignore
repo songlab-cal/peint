@@ -53,3 +53,6 @@ iqtree2/build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Optional ProteinGym checkout, only needed to rebuild VEP inputs (see peint/vep/README.md).
+peint/vep/ProteinGym3/

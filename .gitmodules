@@ -1,6 +1,3 @@
 [submodule "iqtree2"]
 	path = iqtree2
 	url = https://github.com/iqtree/iqtree2.git
-[submodule "peint/vep/ProteinGym3"]
-	path = peint/vep/ProteinGym3
-	url = git@github.com:songlab-cal/ProteinGym3.git

@@ -72,7 +72,7 @@ through [AliSim](https://academic.oup.com/bioinformatics/article/39/9/btad540/72
 provided as a submodule:
 
 ```bash
-git submodule update --init --recursive
+git submodule update --init iqtree2
 
 cd iqtree2
 mkdir build
@@ -83,7 +83,7 @@ cd ../..  # Return to main package directory
 
 # verify installation
 git submodule status
-# Should show: 977cc4324234b36fbfb80b326b8e43b73952e365 iqtree2 (v2.3.4-190-g977cc432)
+# Should show: a00094e03d1ae984e1497e16738f91514df8c366 iqtree2 (v2.3.4-212-ga00094e0)
 ```
 
 ## ESM-C environment (`peint-esmc`)
@@ -225,11 +225,10 @@ import flash_attn
 ImportError: /envs/peint/bin/torch/lib/python3.10/site-packages/torch/lib/../../../../libstdc++.so.6: version `GLIBCXX_3.4.32' not found (required by /envs/peint/lib/python3.10/site-packages/flash_attn_2_cuda.cpython-310-x86_64-linux-gnu.so)
 ```
 
-To the best of my knowledge, this comes from different versions of torch being compiled with
-different versions of the C++ std library (as well as your base OS). I ran into this issue when
-Ubuntu was upgraded to 24.04 from 22.04. The default wheels are built around Ubuntu 22.04.
-There are many ways to potentially fix this, but the one that worked for me was to download a
-prebuilt wheel from the [Flash Attention releases](https://github.com/Dao-AILab/flash-attention/releases)
+This comes from torch and flash-attn being compiled against different versions of the C++
+standard library (and from the base OS). It shows up, for instance, on Ubuntu 24.04 when the
+default wheels were built around Ubuntu 22.04. There are several possible fixes; the one that
+works reliably is to download a prebuilt wheel from the [Flash Attention releases](https://github.com/Dao-AILab/flash-attention/releases)
 page. Find the version of CUDA, Torch, and OS that matches your setup.
 The final consideration is `cxx11abiTRUE` vs `cxx11abiFALSE`. This is addressed
 [in this GitHub issue](https://github.com/Dao-AILab/flash-attention/issues/457#issuecomment-1681544022).

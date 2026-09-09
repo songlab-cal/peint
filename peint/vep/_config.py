@@ -7,6 +7,7 @@ compatibility, so existing ``from peint.vep._vep_utils import VEP_DATA_DIR`` kee
 working.
 """
 
+import os
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -16,10 +17,14 @@ from pathlib import Path
 MAIN_DIR = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = MAIN_DIR / "data/local_data/peint_data"        # symlink -> /scratch
 VEP_DATA_DIR = DATA_DIR / "vep"
-PROTEINGYM_DIR = MAIN_DIR / "peint/vep/ProteinGym3"
+# ProteinGym checkout: only needed to rebuild VEP inputs or compare against ProteinGym's
+# own baselines. Not required for scoring, training, or any published panel.
+PROTEINGYM_DIR = Path(
+    os.environ.get("PEINT_PROTEINGYM_DIR", str(MAIN_DIR / "peint/vep/ProteinGym3"))
+)
 CHECKPOINTS_DIR = MAIN_DIR / "data/local_data/checkpoints"  # symlink -> /scratch
 
-# Results layout (see peint/vep/CLAUDE.md). Scored predictions live under test_lls,
+# Results layout. Scored predictions live under test_lls,
 # split into a curated `production/` set and an `archive/` set of superseded runs.
 TEST_LLS_DIR = VEP_DATA_DIR / "test_lls"
 TEST_LLS_PRODUCTION_DIR = TEST_LLS_DIR / "production"

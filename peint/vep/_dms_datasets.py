@@ -1,13 +1,30 @@
 from pathlib import Path
+
+import pandas as pd
 from loguru import logger
 import os
 
 from peint import caching
 from peint.vep._vep_utils import PROTEINGYM_DIR, VEP_DATA_DIR
-from peint.vep.ProteinGym3.proteingym.baselines.SiteRM._datasets import (
-    get_dms_substitutions_families,
-)
 from peint.datasets._msa_datasets import construct_dataset_on_msas
+
+
+def get_dms_substitutions_families(DMS_reference_file_path: str) -> list[str]:
+    """The sorted DMS assay ids listed in ProteinGym's reference file.
+
+    Ported verbatim from ProteinGym (MIT licence),
+    ``proteingym/baselines/SiteRM/_datasets.py``, so that this module does not depend on a
+    checkout of that repository. The reference file itself is an external input; see
+    ``README.md`` for where to obtain it.
+    """
+    mapping_protein_seq_DMS = pd.read_csv(DMS_reference_file_path)
+    res = sorted(list(set(mapping_protein_seq_DMS["DMS_id"])))
+    if len(res) not in [217, 2525]:
+        raise ValueError(
+            f"Expected 217 DMS assays or 2525 clinical assays. "
+            f"Found: {len(res)} instead. Assays: {res}."
+        )
+    return res
 
 
 def construct_training_dataset_on_dms_msas(

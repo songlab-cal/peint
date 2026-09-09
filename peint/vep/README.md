@@ -15,11 +15,19 @@ Optional extras: `.[train]` adds `wandb` (the default training logger); `.[vep]`
 `huggingface_hub` + `transformers` (only needed for vESM encoders). Training expects a single
 A100 (bf16 + FlashAttention).
 
-**Submodule.** ProteinGym is vendored as a git submodule:
+**ProteinGym data.** Nothing in this module needs a ProteinGym checkout to *score* a
+checkpoint or to draw the paper's VEP panels; the scored per-run tables ship with the paper
+repository. A checkout is needed only to rebuild the VEP inputs from scratch, or to compare
+against ProteinGym's own zero-shot baselines. Two external resources are involved, both from
+[ProteinGym](https://github.com/OATML-Markslab/ProteinGym) (MIT):
 
-```bash
-git submodule update --init peint/vep/ProteinGym3
-```
+- `reference_files/DMS_substitutions.csv` — the DMS assay reference table (217 assays).
+- `input_data/ProteinGym_v1.3/zero_shot_substitutions_scores/` — the official baseline scores,
+  distributed as a download rather than in the repository.
+
+Put a ProteinGym checkout at `peint/vep/ProteinGym3` (the default, gitignored) or point
+`PEINT_PROTEINGYM_DIR` at it. The CherryML cache directories named in `_config.py` are produced
+by ProteinGym's own preprocessing and live under that same directory.
 
 **Data symlinks.** Large data and checkpoints live on `/scratch` and are reached through two
 per-user symlinks under the repo root. They are gitignored (`local_data/`), so create them
@@ -117,5 +125,6 @@ GPU). Set `use_flash=False` for the standard-PyTorch stack (`ESM2Model` +
 - **Scoring needs neither Lightning nor wandb.** Only training pulls those in.
 - **wandb.** The training scripts log to W&B; substitute your own Lightning logger if you don't
   want it (peint's training callbacks are wandb-native, so training as-shipped requires wandb).
-- **ProteinGym3** shows a few locally-modified files (machine-specific config for ProteinGym's
-  *own* zero-shot baselines); they are not used by the PEINT pipeline.
+- **ProteinGym** is not a dependency of this package. The one helper that used to be imported
+  from it (`get_dms_substitutions_families`) is now in `_dms_datasets.py`; its data files stay
+  external, as described above.

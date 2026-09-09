@@ -49,14 +49,6 @@ from peint.models.training import PeintLightningModule, ValidationLikelihoodCall
 from peint.datasets.training import PeintDataModule
 ```
 
-Can you help me to make this ready to share. There are some hard-coded links, and I have changed the name of the checkpoint from `epoch=2-step=40000.ckpt` to `peint.ckpt`. This needs to be updated in the tests.
-
-I have also provided a checkpoint for variant effect prediction `vep.ckpt`.
-Let's do the following:
-1. Remove hard links.
-2. Convert these checkpoints to peint_only checkpoints (much smaller), and ensure the tests still run.
-3. Create a simple VEP notebook showing VEP performance. I have the data in this folder (`NRAM_I33A0_Jiang_2016.csv`), and an example notebook (`vep_example.ipynb`) that come from a different time and may not work. Please update the functions to use the `vep.ckpt` and run VEP on that model on that example.
-
 
 ## Design Principles
 
