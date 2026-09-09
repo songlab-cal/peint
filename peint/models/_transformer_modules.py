@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange
+from einops import rearrange, repeat
 from esm.modules import gelu #use esm gelu
 
 # Architecture constants
@@ -59,6 +59,11 @@ try:
               "Using standard PyTorch attention.")
 except ImportError:
     print("Flash Attention not available. Using standard PyTorch attention.")
+
+    from peint.models._rotary_fallback import (  # noqa: F401
+        RotaryEmbedding as FlashRotaryEmbedding,
+        apply_rotary_emb_torch,
+    )
 
 if FLASH_AVAILABLE:
     def unpad_input(hidden_states, attention_mask):
