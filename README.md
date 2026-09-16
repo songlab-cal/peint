@@ -3,10 +3,19 @@
 An encoder-decoder transformer for modeling protein sequence evolution. Given a source sequence and evolutionary time, PEINT autoregressively predicts the target sequence.
 
 The paper's figures, benchmarks and data live in the companion
-[`peint-paper`](https://github.com/songlab-cal/peint-paper) repository. The data itself is
-deposited on Zenodo as record `22151902` (DOI added on publication); because `zenodo.org` was
-unreachable on 9 September 2026, the 20 MB replot archive is temporarily mirrored on that
-repository's `zenodo-22151902` release. Model checkpoints are in the deposit, not here.
+[`peint-paper`](https://github.com/songlab-cal/peint-paper) repository. The data — model
+checkpoints included — is deposited on Zenodo:
+
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22151902.svg)](https://doi.org/10.5281/zenodo.22151902)
+
+Cite [`10.5281/zenodo.22151902`](https://doi.org/10.5281/zenodo.22151902) — record `22151902`,
+the exact version the paper's results were reproduced from. This repository and `peint-paper`
+both carry the matching tag `zenodo-22151902`.
+
+**What this repository needs from the deposit:** `peint_checkpoints.tar.zst` alone — the five
+model checkpoints. Add `peint_transitions_aligned.tar.zst` and `peint_transitions_unaligned.tar.zst`
+only to rerun the held-out likelihood evaluation. Every other archive is figure data belonging to
+`peint-paper`, whose `data/MANIFEST.toml` is the authoritative per-file inventory.
 
 ## Installation
 
@@ -47,11 +56,21 @@ pip install -e ".[dev]"
 
 ## Model Checkpoints
 
-The trained checkpoints are distributed separately as `peint_model_checkpoints.zip`. Unzip it at the repository root to create the `model_checkpoints/` directory:
+The trained checkpoints ship in the [Zenodo deposit](https://doi.org/10.5281/zenodo.22151902)
+as `peint_checkpoints.tar.zst`. Its members unpack under `peint/model_checkpoints/`, which would
+collide with this repository's `peint/` package directory — so extract it elsewhere and move the
+directory into place:
 
 ```bash
-unzip peint_model_checkpoints.zip   # creates model_checkpoints/peint.ckpt and model_checkpoints/vep.ckpt
+curl -L -O "https://zenodo.org/records/22151902/files/peint_checkpoints.tar.zst?download=1"
+mkdir -p /tmp/peint_ckpt
+tar --use-compress-program=unzstd -xf peint_checkpoints.tar.zst -C /tmp/peint_ckpt
+mv /tmp/peint_ckpt/peint/model_checkpoints ./model_checkpoints   # creates model_checkpoints/peint.ckpt, vep.ckpt, ...
+rm -rf /tmp/peint_ckpt
 ```
+
+Requires `zstd` on `PATH`. The two checkpoints below are the ones this README uses; the archive
+carries five in total.
 
 | Checkpoint | Description |
 |------------|-------------|
