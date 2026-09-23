@@ -6,12 +6,12 @@
 #SBATCH --partition=gpu          # set to your cluster's GPU partition
 #SBATCH --gres=gpu:2
 
-# Example training launch. Replace the placeholder paths with your own:
-#   --data_path      directory of transition data
+# Released-checkpoint training launch. Replace the placeholder paths with your own:
+#   --data_path      directory of gapless transitions (see README, Dataset Creation)
 #   --families_file  json file describing the protein families
 #   --output_dir     where to write checkpoints
 srun python train_peint_model.py \
---data_path /path/to/transitions \
+--data_path /path/to/unaligned/train_transitions_dir \
 --families_file /path/to/families.json \
 --output_dir checkpoints \
 --batch_size 32 \
@@ -23,8 +23,8 @@ srun python train_peint_model.py \
 --embed_dim 640 \
 --seed 0 \
 --n_families -1 \
---accumulate_grad_batches 13 \
---checkpoint_every 3000 \
+--accumulate_grad_batches 12 \
+--checkpoint_every 4000 \
 --accelerator gpu \
 --devices 0 1 \
 --max_steps 300000 \
@@ -33,5 +33,4 @@ srun python train_peint_model.py \
 --weight_decay 0.01 \
 --grad_clip 1.0 \
 --use_attention_bias \
---esm_model ESM2-150M \
---name_addon cts_dms
+--esm_model ESM2-150M

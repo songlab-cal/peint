@@ -229,75 +229,75 @@ python -m peint.homology_detection all-vs-all \
 
 ## Training
 
+The command used for the released checkpoint (also in `train_peint_model.sh`):
+
 ```bash
 python train_peint_model.py \
-    --data_path /path/to/transitions \
+    --data_path /path/to/unaligned/train_transitions_dir \
     --families_file families.json \
     --output_dir checkpoints \
-    --batch_size 32 \
-    --lr 3e-4 \
-    --num_encoder_layers 6 \
-    --num_decoder_layers 6 \
-    --embed_dim 640 \
-    --num_heads 20
+    --esm_model ESM2-150M \
+    --num_encoder_layers 5 --num_decoder_layers 5 --embed_dim 640 --num_heads 20 \
+    --use_attention_bias --dropout_p 0.0 --max_seq_len 1022 \
+    --batch_size 32 --accumulate_grad_batches 12 --devices 0 1 --accelerator gpu \
+    --lr 3e-4 --weight_decay 0.01 --grad_clip 1.0 --num_warmup_steps 2000 \
+    --max_steps 300000 --checkpoint_every 4000 --n_families -1 --seed 0
 ```
+
+Pass this configuration explicitly: several argparse defaults differ from it. The effective batch
+is 768 sequences per update (32 x 12 accumulation x 2 GPUs); keep that product fixed on other GPU
+counts. `--data_path` must be a **gapless** transitions directory (see below).
 
 ## Dataset Creation
 
-Create training data from a directory of `.a3m` multiple sequence alignment files.
+Create transitions from a directory of `.a3m` multiple sequence alignments. There are two frames:
 
-A wrapper around many of these functions is the caching decorator.
-For more information, you can see the original source [caching-decorator source here](https://github.com/sprillo/caching-decorator).
-The idea is that some functions are fairly expensive to run (tree reconstruction, etc), and represent a bottleneck in a pipeline.
-You really want to cache these functions.
-This decorator wraps a function and caches its results to disk.
+| frame | built with | used for |
+|---|---|---|
+| **unaligned / gapless** | `include_gaps=False`, `return_full_length_unaligned_sequences=True` | **training and validating PEINT** |
+| aligned | `include_gaps=True` (the default) | fitting the classical WAG / LG baselines |
+
+> **Gaps are removed at dataset-creation time, not by the training data loader.** Training on
+> aligned transitions silently trains the model on gap tokens.
+
+Configure both the PEINT and CherryML cache directories, and call dataset creation under an
+`if __name__ == "__main__":` guard (it uses multiprocessing):
 
 ```python
-from peint.datasets import get_a3m_families, a3m_dataset__cached
+from cherryml import caching as cherryml_caching
+from peint import caching as peint_caching
+from peint.datasets import a3m_dataset__cached
 
-# List available families
-families = get_a3m_families("/path/to/a3m_files", num_families=100)
 
-# Create dataset from full trees (no train/test split)
-data_dirs = a3m_dataset__cached(
-    a3m_dir="/path/to/a3m_files",
-    num_families=100,              # -1 for all families
-    num_sequences_per_family=512,
-    num_processes=16,
-    do_train_test_split=False,     # Use full trees
-)
-# Returns: transitions_dir, msa_dir, tree_dir, site_rates_4cat_dir
+def main():
+    peint_caching.set_cache_dir("/path/to/_cache_peint")
+    cherryml_caching.set_cache_dir("/path/to/_cache_cherryml")
 
-# Or with train/test split (for generalization evaluation)
-data_dirs = a3m_dataset__cached(
-    a3m_dir="/path/to/a3m_files",
-    num_families=100,
-    num_sequences_per_family=512,
-    num_processes=16,
-    do_train_test_split=True,      # Split trees into train/test halves
-)
-# Returns: train_transitions_dir, test_transitions_dir, train_msa_dir, etc.
+    # PEINT training data: gapless, with the within-family train/test tree split
+    data_dirs = a3m_dataset__cached(
+        a3m_dir="/path/to/a3m_files",
+        num_families=-1,                    # -1 = all families
+        num_sequences_per_family=2048,
+        return_full_length_unaligned_sequences=True,
+        include_gaps=False,
+        do_train_test_split=True,
+        num_processes=16,
+    )
+    print(data_dirs["train_transitions_dir"])   # --data_path for train_peint_model.py
+
+    # Aligned data, for the classical baselines only
+    baseline_dirs = a3m_dataset__cached(
+        a3m_dir="/path/to/a3m_files",
+        num_families=-1,
+        num_sequences_per_family=2048,
+        do_train_test_split=True,
+        num_processes=16,
+    )
+
+
+if __name__ == "__main__":
+    main()
 ```
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `a3m_dir` | required | Directory containing `.a3m` files |
-| `num_families` | -1 | Number of families (-1 = all) |
-| `num_sequences_per_family` | 1024 | Max sequences to subsample per family |
-| `do_train_test_split` | True | Split tree for train/test, or use full tree |
-| `include_gaps` | True | Include gaps in aligned sequences |
-| `return_full_length_unaligned_sequences` | False | Use unaligned sequences (requires `include_gaps=False`) |
-
-Results are cached; subsequent calls with identical parameters return immediately.
-
-## Model Variants
-
-| Class | Flash Attention | KV Cache | Use Case |
-|-------|-----------------|----------|----------|
-| `PeintTransformer` | Yes | No | Training |
-| `PeintGenerator` | Yes | Yes | Fast generation |
-| `PeintEvaluator` | Yes | Encoder only | Batch likelihood evaluation |
-| `PeintTransformerVanilla` | No | No | CPU/old GPU, attention visualization |
 
 ## Testing
 
