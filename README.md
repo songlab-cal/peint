@@ -6,11 +6,11 @@ The paper's figures, benchmarks and data live in the companion
 [`peint-paper`](https://github.com/songlab-cal/peint-paper) repository. The data — model
 checkpoints included — is deposited on Zenodo:
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22151902.svg)](https://doi.org/10.5281/zenodo.22151902)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23315010.svg)](https://doi.org/10.5281/zenodo.23315010)
 
-Cite [`10.5281/zenodo.22151902`](https://doi.org/10.5281/zenodo.22151902) — record `22151902`,
+Cite [`10.5281/zenodo.23315010`](https://doi.org/10.5281/zenodo.23315010) — record `23315010`,
 the exact version the paper's results were reproduced from. This repository and `peint-paper`
-both carry the matching tag `zenodo-22151902`.
+both carry the matching tag `zenodo-23315010`.
 
 **What this repository needs from the deposit:** `peint_checkpoints.tar.zst` alone — the five
 model checkpoints. Add `peint_transitions_aligned.tar.zst` and `peint_transitions_unaligned.tar.zst`
@@ -56,13 +56,13 @@ pip install -e ".[dev]"
 
 ## Model Checkpoints
 
-The trained checkpoints ship in the [Zenodo deposit](https://doi.org/10.5281/zenodo.22151902)
+The trained checkpoints ship in the [Zenodo deposit](https://doi.org/10.5281/zenodo.23315010)
 as `peint_checkpoints.tar.zst`. Its members unpack under `peint/model_checkpoints/`, which would
 collide with this repository's `peint/` package directory — so extract it elsewhere and move the
 directory into place:
 
 ```bash
-curl -L -O "https://zenodo.org/records/22151902/files/peint_checkpoints.tar.zst?download=1"
+curl -L -O "https://zenodo.org/records/23315010/files/peint_checkpoints.tar.zst?download=1"
 mkdir -p /tmp/peint_ckpt
 tar --use-compress-program=unzstd -xf peint_checkpoints.tar.zst -C /tmp/peint_ckpt
 mv /tmp/peint_ckpt/peint/model_checkpoints ./model_checkpoints   # creates model_checkpoints/peint.ckpt, vep.ckpt, ...
@@ -250,7 +250,11 @@ counts. `--data_path` must be a **gapless** transitions directory (see below).
 
 ## Dataset Creation
 
-Create transitions from a directory of `.a3m` multiple sequence alignments. There are two frames:
+Create transitions from a directory of `.a3m` multiple sequence alignments. The released models
+were trained on the 15,051 alignments of the trRosetta training set
+(`https://files.ipd.uw.edu/pub/trRosetta/training_set.tar.gz`, 30.8 GB; its members are
+`./training_set/{a3m,npy,pdb}/...`, so `tar -xzf training_set.tar.gz --strip-components=2 -C
+input_data/` gives `input_data/a3m/`). There are two frames:
 
 | frame | built with | used for |
 |---|---|---|

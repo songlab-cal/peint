@@ -32,6 +32,7 @@ from peint import models
 from peint.evaluation import evaluate_peint_model_transitions_log_likelihood__cached
 from peint.io import read_transitions, read_transitions_log_likelihood_per_site
 from peint.utils import (
+    gap_character,
     get_quantile_idx,
     get_quantization_points_from_geometric_grid,
 )
@@ -50,11 +51,9 @@ UNALIGNED_TEST_ALIGNMENT_MASK_DIR = "local_data/unaligned/test_alignment_mask_di
 PEINT_CHECKPOINT_FILE = "model_checkpoints/peint.ckpt"
 # ESM-C PEINT (A3, 60k; frozen esmc_300m + trained PEINT). Self-describing checkpoint
 # (encoder_backbone="esmc-biohub"), auto-loaded onto the Biohub ESM-C backbone by
-# peint.models.load_peint_model. Requires the `peint-esmc` env (+ HF_HOME set).
-ESMC_CHECKPOINT_FILE = (
-    "/scratch/users/yufan.cao/protevo_ablations/esmc/"
-    "20260729-5e5d20h960d-esmc-14498fams-esmc/epoch=4-step=60000.ckpt"
-)
+# peint.models.load_peint_model. Requires the `peint-esmc` env (+ HF_HOME set). The released
+# peint_esmc.ckpt (Zenodo peint_checkpoints) is this model.
+ESMC_CHECKPOINT_FILE = "model_checkpoints/peint_esmc.ckpt"
 
 # Canonical model->color scheme, matched to the paper's ESM-C figures (seaborn "deep"
 # palette indices: WAG=0, LG4X=3, PEINT (ESM2)=2 green, PEINT (ESM-C)=9 cyan).
@@ -158,13 +157,16 @@ def accumulate_by_time_bin(families, transitions_dir, per_site_dirs, quantizatio
         # PEINT leaves transitions it could not score (too long) as NaN.
         scored = ~np.isnan(np.stack(list(per_site.values()))).any(axis=(0, 2))
 
-        for i, (_, _, t) in enumerate(transitions):
+        for i, (x, y, t) in enumerate(transitions):
             if not scored[i]:
                 continue
             bin_idx = get_quantile_idx(quantization_points, t)
+            # Average over the columns where both the aligned source and target hold a residue,
+            # as in main Fig 2a: gap columns (scored 0) and insertions in y are left out.
+            both = np.array([a != gap_character and c != gap_character for a, c in zip(x, y)])
             for name, log_likelihoods in per_site.items():
-                totals[name][bin_idx] += log_likelihoods[i].sum()
-                counts[name][bin_idx] += log_likelihoods.shape[1]
+                totals[name][bin_idx] += log_likelihoods[i][both].sum()
+                counts[name][bin_idx] += int(both.sum())
 
     return totals, counts
 
