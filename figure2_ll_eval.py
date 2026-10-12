@@ -51,11 +51,9 @@ UNALIGNED_TEST_ALIGNMENT_MASK_DIR = "local_data/unaligned/test_alignment_mask_di
 PEINT_CHECKPOINT_FILE = "model_checkpoints/peint.ckpt"
 # ESM-C PEINT (A3, 60k; frozen esmc_300m + trained PEINT). Self-describing checkpoint
 # (encoder_backbone="esmc-biohub"), auto-loaded onto the Biohub ESM-C backbone by
-# peint.models.load_peint_model. Requires the `peint-esmc` env (+ HF_HOME set).
-ESMC_CHECKPOINT_FILE = (
-    "/scratch/users/yufan.cao/protevo_ablations/esmc/"
-    "20260729-5e5d20h960d-esmc-14498fams-esmc/epoch=4-step=60000.ckpt"
-)
+# peint.models.load_peint_model. Requires the `peint-esmc` env (+ HF_HOME set). The released
+# peint_esmc.ckpt (Zenodo peint_checkpoints) is this model.
+ESMC_CHECKPOINT_FILE = "model_checkpoints/peint_esmc.ckpt"
 
 # Canonical model->color scheme, matched to the paper's ESM-C figures (seaborn "deep"
 # palette indices: WAG=0, LG4X=3, PEINT (ESM2)=2 green, PEINT (ESM-C)=9 cyan).

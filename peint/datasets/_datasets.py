@@ -1141,8 +1141,9 @@ def pfam_15k__treewise_train_test_split__cached(
             the sites in the full sequence and the aligned sites in the
             aligned transitions.
     """
-    PFAM_15K_MSA_DIR = "/home/akoehl/Projects/protein-evolution/input_data/a3m"
-    PFAM_15K_PDB_DIR = "/home/akoehl/Projects/protein-evolution/input_data/pdb"
+    # The trRosetta training set (a3m/ and pdb/ of training_set.tar.gz); see the README.
+    PFAM_15K_MSA_DIR = os.environ.get("PEINT_TRROSETTA_A3M_DIR", "input_data/a3m")
+    PFAM_15K_PDB_DIR = os.environ.get("PEINT_TRROSETTA_PDB_DIR", "input_data/pdb")
 
     if return_full_length_unaligned_sequences and include_gaps:
         raise ValueError(
@@ -1434,7 +1435,7 @@ def casp14__treewise_train_test_split__cached(
             aligned transitions.
     """
 
-    CASP14_MSA_DIR = "/scratch/users/akoehl/protein-evolution/input_data/casp14_a3m"
+    CASP14_MSA_DIR = os.environ.get("PEINT_CASP14_A3M_DIR", "input_data/casp14_a3m")
 
     if return_full_length_unaligned_sequences and include_gaps:
         raise ValueError(

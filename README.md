@@ -250,7 +250,11 @@ counts. `--data_path` must be a **gapless** transitions directory (see below).
 
 ## Dataset Creation
 
-Create transitions from a directory of `.a3m` multiple sequence alignments. There are two frames:
+Create transitions from a directory of `.a3m` multiple sequence alignments. The released models
+were trained on the 15,051 alignments of the trRosetta training set
+(`https://files.ipd.uw.edu/pub/trRosetta/training_set.tar.gz`, 30.8 GB; its members are
+`./training_set/{a3m,npy,pdb}/...`, so `tar -xzf training_set.tar.gz --strip-components=2 -C
+input_data/` gives `input_data/a3m/`). There are two frames:
 
 | frame | built with | used for |
 |---|---|---|
