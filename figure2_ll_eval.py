@@ -32,6 +32,7 @@ from peint import models
 from peint.evaluation import evaluate_peint_model_transitions_log_likelihood__cached
 from peint.io import read_transitions, read_transitions_log_likelihood_per_site
 from peint.utils import (
+    gap_character,
     get_quantile_idx,
     get_quantization_points_from_geometric_grid,
 )
@@ -158,13 +159,16 @@ def accumulate_by_time_bin(families, transitions_dir, per_site_dirs, quantizatio
         # PEINT leaves transitions it could not score (too long) as NaN.
         scored = ~np.isnan(np.stack(list(per_site.values()))).any(axis=(0, 2))
 
-        for i, (_, _, t) in enumerate(transitions):
+        for i, (x, y, t) in enumerate(transitions):
             if not scored[i]:
                 continue
             bin_idx = get_quantile_idx(quantization_points, t)
+            # Average over the columns where both the aligned source and target hold a residue,
+            # as in main Fig 2a: gap columns (scored 0) and insertions in y are left out.
+            both = np.array([a != gap_character and c != gap_character for a, c in zip(x, y)])
             for name, log_likelihoods in per_site.items():
-                totals[name][bin_idx] += log_likelihoods[i].sum()
-                counts[name][bin_idx] += log_likelihoods.shape[1]
+                totals[name][bin_idx] += log_likelihoods[i][both].sum()
+                counts[name][bin_idx] += int(both.sum())
 
     return totals, counts
 
